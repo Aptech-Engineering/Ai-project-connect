@@ -1,0 +1,95 @@
+@import "tailwindcss";
+
+@theme {
+  /* PRD palette */
+  --color-navy-950: #06142a;
+  --color-navy: #0b1f3a;
+  --color-navy-800: #112846;
+  --color-navy-700: #1a3561;
+  --color-navy-600: #26467a;
+  --color-brand: #f26b22;
+  --color-brand-600: #e05a12;
+  --color-brand-700: #b9470a;
+  --color-brand-soft: #fdebdd;
+  --color-teal: #14a38b;
+  --color-teal-700: #0d7a68;
+  --color-teal-soft: #ddf2ee;
+  --color-mist: #f3f5f9;
+  --color-line: #e3e8f0;
+  --color-muted: #5b6b82;
+  --color-blue-soft: #dfe7f2;
+  --color-danger: #b42318;
+  --color-danger-soft: #fbe3e1;
+
+  --font-display: var(--font-poppins), ui-sans-serif, system-ui, sans-serif;
+  --font-sans: var(--font-lato), ui-sans-serif, system-ui, sans-serif;
+
+  --animate-marquee: marquee 38s linear infinite;
+  --animate-ripple: ripple 6s ease-out infinite;
+  --animate-shimmer: shimmer 2.4s linear infinite;
+  --animate-spin-slow: spin 60s linear infinite;
+
+  @keyframes marquee {
+    from { transform: translateX(0); }
+    to { transform: translateX(-50%); }
+  }
+  @keyframes ripple {
+    0% { transform: scale(0.85); opacity: 0; }
+    30% { opacity: 0.55; }
+    100% { transform: scale(1.25); opacity: 0; }
+  }
+  @keyframes shimmer {
+    from { transform: translateX(-100%); }
+    to { transform: translateX(200%); }
+  }
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+    -webkit-tap-highlight-color: transparent;
+  }
+  body {
+    @apply bg-white font-sans text-navy antialiased;
+  }
+  ::selection {
+    background: var(--color-brand);
+    color: white;
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-brand);
+    outline-offset: 3px;
+  }
+}
+
+@utility container-page {
+  width: 100%;
+  max-width: 1200px;
+  margin-inline: auto;
+  padding-inline: 1rem;
+  @media (width >= 40rem) {
+    padding-inline: 1.5rem;
+  }
+}
+
+@utility bg-dots {
+  background-image: radial-gradient(rgb(255 255 255 / 0.09) 1px, transparent 1px);
+  background-size: 22px 22px;
+}
+
+@utility no-scrollbar {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
+}
