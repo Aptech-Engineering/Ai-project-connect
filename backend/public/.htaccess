@@ -1,0 +1,35 @@
+# API routing for Apache (cPanel / Nairahost)
+Options -Indexes
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # Pass Authorization headers through (some shared hosts strip them)
+    RewriteCond %{HTTP:Authorization} .
+    RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
+    # Everything that isn't a real file goes to index.php
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteRule ^ index.php [L]
+</IfModule>
+
+# Never serve dotfiles or config
+<FilesMatch "^\.|\.(sql|log|ini|env|json)$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Deny from all
+    </IfModule>
+</FilesMatch>
+
+<IfModule mod_headers.c>
+    Header always set X-Content-Type-Options "nosniff"
+</IfModule>
+
+# Uploads: PDF up to 10 MB (raise if you change uploads.max_*_mb)
+<IfModule mod_php.c>
+    php_value upload_max_filesize 12M
+    php_value post_max_size 14M
+</IfModule>
