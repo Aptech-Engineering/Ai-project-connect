@@ -3,75 +3,98 @@
 /**
  * Admin settings: payment credentials, bank account and notification providers.
  *
- * Secrets are write-only. The real server encrypts them and never sends them back,
- * so this mock keeps only the last 4 characters and throws the value away — the same
- * shape the API returns ({ set, last4, updatedAt, updatedBy }).
+ * Secrets are write-only. The server encrypts them and only ever returns
+ * { set, last4, updatedAt, updatedBy, source }, so nothing here ever holds a key.
  */
-import { createDocument } from "./collection";
+import { useMemo } from "react";
+import { api } from "./api";
+import { invalidate, useApi } from "./remote";
 import { readSiteContent, useSiteContent } from "./content";
-import { logActivity } from "./store";
-import type { Person } from "./types";
 
 export interface SecretMeta {
   set: boolean;
-  last4?: string;
-  updatedAt?: string;
-  updatedBy?: string;
+  last4?: string | null;
+  updatedAt?: string | null;
+  updatedBy?: string | null;
+  source?: "settings" | "config" | "default";
 }
 
 export type PaystackMode = "test" | "live";
 export type NotificationDriver = "log" | "mail" | "termii";
 
-export const DEFAULT_SETTINGS = {
-  payments: {
-    commitmentFee: 2000,
-    currency: "NGN",
-    paystackEnabled: true,
-    manualEnabled: true,
-    bankName: "Access Bank",
-    accountName: "Aptech Computer Education",
-    accountNumber: "0000000000",
-  },
-  paystack: {
-    mode: "test" as PaystackMode,
-    testPublicKey: "",
-    livePublicKey: "",
-    testSecretKey: { set: false } as SecretMeta,
-    liveSecretKey: { set: false } as SecretMeta,
-  },
-  notifications: {
-    driver: "log" as NotificationDriver,
-    fromEmail: "hello@aiprojectconnect.com",
-    fromName: "AI Project Connect",
-    smtpHost: "",
-    smtpPort: "587",
-    smtpUser: "",
-    smtpPassword: { set: false } as SecretMeta,
-    termiiApiKey: { set: false } as SecretMeta,
-    termiiSenderId: "AptechAPC",
-  },
+export interface PaymentSettings {
+  commitmentFee: number;
+  currency: string;
+  paystackEnabled: boolean;
+  manualEnabled: boolean;
+  bankName: string;
+  accountName: string;
+  accountNumber: string;
+}
+
+export interface PaystackSettings {
+  mode: PaystackMode;
+  testPublicKey: string;
+  livePublicKey: string;
+  testSecretKey: SecretMeta;
+  liveSecretKey: SecretMeta;
+  /** Read-only, from the server. */
+  callbackUrl?: string;
+  webhookUrl?: string;
+  liveReady?: boolean;
+  fakeMode?: boolean;
+}
+
+export interface NotificationSettings {
+  driver: NotificationDriver;
+  fromEmail: string;
+  fromName: string;
+  smtpHost: string;
+  smtpPort: number | string;
+  smtpUser: string;
+  smtpPassword: SecretMeta;
+  termiiApiKey: SecretMeta;
+  termiiSenderId: string;
+}
+
+export interface Settings {
+  payments: PaymentSettings;
+  paystack: PaystackSettings;
+  notifications: NotificationSettings;
+  meta?: { sources?: Record<string, string>; updatedAt?: string | null; encryptionReady?: boolean; warnings?: string[] };
+}
+
+const SETTINGS = "/admin/settings";
+
+const NO_SECRET: SecretMeta = { set: false };
+
+/** Used until the settings load, and as the shape components can rely on. */
+export const DEFAULT_SETTINGS: Settings = {
+  payments: { commitmentFee: 2000, currency: "NGN", paystackEnabled: true, manualEnabled: true, bankName: "", accountName: "", accountNumber: "" },
+  paystack: { mode: "test", testPublicKey: "", livePublicKey: "", testSecretKey: NO_SECRET, liveSecretKey: NO_SECRET },
+  notifications: { driver: "log", fromEmail: "", fromName: "AI Project Connect", smtpHost: "", smtpPort: 587, smtpUser: "", smtpPassword: NO_SECRET, termiiApiKey: NO_SECRET, termiiSenderId: "" },
 };
 
-export type Settings = typeof DEFAULT_SETTINGS;
+/** Last payment settings seen, so non-React code can read them synchronously. */
+let paymentSnapshot: PaymentSettings = DEFAULT_SETTINGS.payments;
 
-const doc = createDocument<Settings>("apc-admin-settings-v1", DEFAULT_SETTINGS);
+/** Admin only. Anything public should use `application.checkout` from the API instead. */
+export function useSettings() {
+  const { data, loading, error, refresh } = useApi<Settings>(SETTINGS);
+  const settings = data ?? DEFAULT_SETTINGS;
+  if (data?.payments) paymentSnapshot = data.payments;
+  return { settings, loading, error, refresh };
+}
 
-export const useSettings = () => doc.useDoc();
-export const readSettings = () => doc.read();
-export const resetSettings = () => doc.reset();
-
-/** Payment settings (admin settings) merged with the client-facing wording (site content). */
+/** Payment settings (admin) merged with the client-facing wording (site content). */
 export function usePaymentSettings() {
-  return { ...useSiteContent().payments, ...useSettings().payments };
+  const { settings } = useSettings();
+  const content = useSiteContent().payments;
+  return useMemo(() => ({ ...content, ...settings.payments }), [content, settings.payments]);
 }
 
 export function readPaymentSettings() {
-  return { ...readSiteContent().payments, ...readSettings().payments };
-}
-
-/** Turns a secret into the metadata we keep. The value itself is never stored. */
-export function secretMeta(value: string, actor: Person): SecretMeta {
-  return { set: true, last4: value.trim().slice(-4), updatedAt: new Date().toISOString(), updatedBy: actor.name };
+  return { ...readSiteContent().payments, ...paymentSnapshot };
 }
 
 export const KEY_PATTERN = /^(sk|pk)_(test|live)_[A-Za-z0-9]{10,}$/;
@@ -96,59 +119,30 @@ export function activeKeys(s: Settings) {
 export function paystackProblem(s: Settings): string | null {
   if (!s.payments.paystackEnabled) return null;
   const { publicKey, secret } = activeKeys(s);
-  const mode = s.paystack.mode;
-  if (!secret.set || !publicKey) return `Add your ${mode} Paystack keys in Settings before clients can pay online.`;
+  if (!secret.set || !publicKey) return `Add your ${s.paystack.mode} Paystack keys in Settings before clients can pay online.`;
   return null;
 }
 
 export interface SettingsPatch {
-  payments?: Partial<Settings["payments"]>;
-  paystack?: Partial<Omit<Settings["paystack"], "testSecretKey" | "liveSecretKey">> & { testSecretKey?: string | null; liveSecretKey?: string | null };
-  notifications?: Partial<Omit<Settings["notifications"], "smtpPassword" | "termiiApiKey">> & { smtpPassword?: string | null; termiiApiKey?: string | null };
+  payments?: Partial<PaymentSettings>;
+  paystack?: Partial<Omit<PaystackSettings, "testSecretKey" | "liveSecretKey" | "callbackUrl" | "webhookUrl" | "liveReady" | "fakeMode">> & { testSecretKey?: string | null; liveSecretKey?: string | null };
+  notifications?: Partial<Omit<NotificationSettings, "smtpPassword" | "termiiApiKey">> & { smtpPassword?: string | null; termiiApiKey?: string | null };
 }
-
-const SECRET_FIELDS = { paystack: ["testSecretKey", "liveSecretKey"], notifications: ["smtpPassword", "termiiApiKey"] } as const;
 
 /**
- * Saves a partial update. A secret given as "" is left as it was, null clears it,
- * and any other string replaces it. Values are never written to the activity log.
+ * Saves a partial update. A secret sent as "" keeps what's stored, null clears it,
+ * and any other string replaces it.
  */
-export function saveSettings(patch: SettingsPatch, actor: Person): string[] {
-  const current = readSettings();
-  const next: Settings = { payments: { ...current.payments }, paystack: { ...current.paystack }, notifications: { ...current.notifications } };
-  const changed: string[] = [];
-
-  for (const group of ["payments", "paystack", "notifications"] as const) {
-    const values = patch[group] as Record<string, unknown> | undefined;
-    if (!values) continue;
-    const secrets: readonly string[] = group === "payments" ? [] : SECRET_FIELDS[group];
-    for (const [key, value] of Object.entries(values)) {
-      const target = next[group] as Record<string, unknown>;
-      if (secrets.includes(key)) {
-        if (value === "" || value === undefined) continue;
-        target[key] = value === null ? { set: false } : secretMeta(String(value), actor);
-        changed.push(`${group}.${key}`);
-        continue;
-      }
-      if (value === undefined || JSON.stringify(target[key]) === JSON.stringify(value)) continue;
-      target[key] = value;
-      changed.push(`${group}.${key}`);
-    }
-  }
-
-  if (changed.length === 0) return [];
-  doc.set(next);
-  logActivity(actor, `Updated settings: ${changed.join(", ")}`);
-  return changed;
+export async function saveSettings(patch: SettingsPatch) {
+  const saved = await api.put<Settings>(SETTINGS, patch);
+  if (saved?.payments) paymentSnapshot = saved.payments;
+  await invalidate(SETTINGS, "/content");
+  return saved;
 }
 
-/** Stands in for the server-side call that verifies the key with Paystack. */
-export function testPaystack(): { ok: boolean; message: string } {
-  const s = readSettings();
-  const { publicKey, secret } = activeKeys(s);
-  if (!secret.set) return { ok: false, message: `No ${s.paystack.mode} secret key saved yet.` };
-  if (!publicKey) return { ok: false, message: `Add the ${s.paystack.mode} public key too — the checkout needs it.` };
-  return { ok: true, message: `Connected to Paystack in ${s.paystack.mode} mode. On the live site this checks the key with Paystack itself.` };
+/** Asks the server to call Paystack with the stored key for the current mode. */
+export function testPaystack() {
+  return api.post<{ ok: boolean; message: string; mode: PaystackMode; business?: string }>(`${SETTINGS}/paystack/test`);
 }
 
 export const WEBHOOK_PATH = "/api/payments/paystack/webhook";

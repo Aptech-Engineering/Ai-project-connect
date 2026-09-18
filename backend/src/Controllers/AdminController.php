@@ -251,7 +251,18 @@ final class AdminController
     public static function users(Request $r): void
     {
         Auth::requireStaff(['admin']);
-        Response::json(array_map([Presenter::class, 'user'], Database::all('SELECT * FROM users ORDER BY status, name')));
+        // Workload per user in one grouped query: active projects they lead or are on the team of.
+        $counts = array_column(Database::all(
+            "SELECT user_id, COUNT(DISTINCT project_id) AS projects FROM (
+                 SELECT lead_id AS user_id, id AS project_id FROM projects WHERE stage <> 'DELIVERED' AND lead_id IS NOT NULL
+                 UNION
+                 SELECT pm.user_id, pm.project_id FROM project_members pm JOIN projects p ON p.id = pm.project_id WHERE p.stage <> 'DELIVERED'
+             ) assignments GROUP BY user_id",
+        ), 'projects', 'user_id');
+        Response::json(array_map(
+            static fn (array $u) => Presenter::user($u) + ['projectCount' => (int) ($counts[(int) $u['id']] ?? 0)],
+            Database::all('SELECT * FROM users ORDER BY status, name'),
+        ));
     }
 
     public static function createUser(Request $r): void
@@ -279,7 +290,7 @@ final class AdminController
             'must_change_password' => 1,
         ]);
         Activity::staff($admin, "Created {$data['role']} account for {$data['name']}");
-        Notifier::staff($email, 'Your AI Project Connect staff account', "Hi {$data['name']},\n\nAn admin created a " . Presenter::roleLabel($data['role']) . " account for you. Sign in at " . rtrim((string) \App\Core\Config::get('app.url'), '/') . "/engineering with {$email} and the temporary password your admin shares with you. You'll be asked to choose a new password.");
+        Notifier::staff($email, 'Your AI Project Connect staff account', "Hi {$data['name']},\n\nAn admin created a " . Presenter::roleLabel($data['role']) . " account for you. Sign in at " . \App\Support\Links::engineering() . " with {$email} and the temporary password your admin shares with you. You'll be asked to choose a new password.");
         Response::json(Presenter::user(Database::one('SELECT * FROM users WHERE id = ?', [$id])), 201);
     }
 

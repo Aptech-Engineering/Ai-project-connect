@@ -26,7 +26,7 @@ export default function UpdatesFeed({ project }: { project: Project }) {
         <span className="rounded-full bg-mist px-3 py-1 text-xs font-bold text-muted">{visible.length} updates</span>
       </div>
 
-      <ol className="relative mt-6">
+      <ol className={cn("relative", visible.length > 0 ? "mt-6" : "hidden")}>
         <span className="absolute bottom-3 left-[7px] top-3 w-0.5 bg-line" aria-hidden />
         <AnimatePresence initial={false}>
           {updates.map((u, i) => (
@@ -51,6 +51,12 @@ export default function UpdatesFeed({ project }: { project: Project }) {
           ))}
         </AnimatePresence>
       </ol>
+
+      {visible.length === 0 && (
+        <p className="mt-5 rounded-2xl border border-dashed border-line p-4 text-sm text-muted">
+          No updates yet. Your team posts one whenever something moves, and you&apos;ll get an email each time.
+        </p>
+      )}
 
       {visible.length > INITIAL && (
         <button
@@ -99,8 +105,7 @@ function UpdateItem({ update: u, latest }: { update: Update; latest: boolean }) 
             href={u.demoLink}
             target="_blank"
             rel="noreferrer"
-            onClick={(e) => e.preventDefault()}
-            title="Demo links open the staging site (mock)"
+            title="Opens the demo your team shared, in a new tab"
             className="flex items-center gap-1 rounded-full border border-teal/30 bg-teal-soft px-2.5 py-1 text-xs font-bold text-teal-700 hover:border-teal"
           >
             Try the demo <ExternalLink className="size-3" />

@@ -5,13 +5,14 @@ import Link from "next/link";
 import { AnimatePresence, motion, useAnimationControls } from "framer-motion";
 import { AlertCircle, ArrowLeft, ArrowRight, Eye, EyeOff, GitPullRequestArrow, Layers, Loader2, Lock, ShieldCheck, User } from "lucide-react";
 import Logo from "../Logo";
-import { findUserByEmail, updateStaffUser, verifyPassword, type StaffUser } from "@/lib/staff";
+import { signIn, type StaffUser } from "@/lib/staff";
+import { ApiError, errorMessage } from "@/lib/api";
 import { cn } from "@/lib/format";
 import { ForgotPassword, ResetPassword } from "./PasswordRecovery";
 
 const MAX_ATTEMPTS = 5;
 
-export default function StaffLogin({ onSuccess, resetToken, onResetDone }: { onSuccess: (user: StaffUser) => void; resetToken?: string | null; onResetDone?: () => void }) {
+export default function StaffLogin({ onSuccess, resetToken, onResetDone }: { onSuccess: (user: StaffUser) => void | Promise<void>; resetToken?: string | null; onResetDone?: () => void }) {
   const [view, setView] = useState<"login" | "forgot">("login");
   const [login, setLogin] = useState("");
   const [password, setPassword] = useState("");
@@ -47,27 +48,30 @@ export default function StaffLogin({ onSuccess, resetToken, onResetDone }: { onS
     setBusy(true);
     setError("");
     // "aptechdevteam.com" was the original demo login; it now maps to the admin account.
-    const email = login.trim().toLowerCase() === "aptechdevteam.com" ? "admin@aptechdevteam.com" : login;
-    const user = findUserByEmail(email);
-    const [valid] = await Promise.all([user ? verifyPassword(user, password) : Promise.resolve(false), new Promise((res) => window.setTimeout(res, 700))]);
-    if (user && valid && user.status === "active") {
-      updateStaffUser(user.id, { lastLoginAt: new Date().toISOString() });
-      onSuccess(user);
+    const email = login.trim().toLowerCase() === "aptechdevteam.com" ? "admin@aptechdevteam.com" : login.trim();
+    try {
+      const user = await signIn(email, password);
+      await onSuccess(user);
       return;
-    }
-    {
+    } catch (e) {
       setBusy(false);
       shake.start({ x: [0, -10, 10, -7, 7, -3, 0], transition: { duration: 0.45 } });
       setPassword("");
+      // The server rate-limits too; this keeps the form quiet for a moment as well.
       const n = attempts + 1;
-      if (n >= MAX_ATTEMPTS) {
+      if (e instanceof ApiError && e.status === 429) {
+        setAttempts(0);
+        setNow(Date.now());
+        setLockedUntil(Date.now() + 30_000);
+        setError(e.message);
+      } else if (n >= MAX_ATTEMPTS) {
         setAttempts(0);
         setNow(Date.now());
         setLockedUntil(Date.now() + 30_000);
         setError("Too many failed attempts. Sign-in is locked for 30 seconds.");
       } else {
         setAttempts(n);
-        setError(`Incorrect email or password. ${MAX_ATTEMPTS - n} attempt${MAX_ATTEMPTS - n === 1 ? "" : "s"} left.`);
+        setError(errorMessage(e));
       }
     }
   };

@@ -107,7 +107,7 @@ final class ApplicationsController
             foreach ($drafts as $d) {
                 $token = Wallet::issueToken((int) $d['id']);
                 $links[] = Wallet::resumeLink($token);
-                $lines[] = sprintf("• %s (%s), last saved %s\n  %s", $d['title'] ?: 'Untitled idea', $d['ref'], date('j M Y', (int) strtotime((string) ($d['last_saved_at'] ?? $d['created_at']))), end($links));
+                $lines[] = sprintf("\u{2022} %s (%s), last saved %s\n  %s", $d['title'] ?: 'Untitled idea', $d['ref'], date('j M Y', (int) strtotime((string) ($d['last_saved_at'] ?? $d['created_at']))), end($links));
             }
             Notifier::email('client', $email, 'Continue your application', "Hi,\n\nHere " . (count($drafts) === 1 ? 'is the link to your saved application' : 'are the links to your saved applications') . ":\n\n" . implode("\n\n", $lines) . "\n\nIf you didn't ask for this, you can ignore this email.\n\nAI Project Connect");
             Activity::system('Resume links emailed for ' . count($drafts) . ' draft idea(s)');
@@ -317,7 +317,8 @@ final class ApplicationsController
         });
     }
 
-    public static function sendResumeEmail(array $idea, string $token, bool $walkIn): void
+    /** @param bool|null $withSms defaults to walk-ins only (they were just given the link in person) */
+    public static function sendResumeEmail(array $idea, string $token, bool $walkIn, ?bool $withSms = null): void
     {
         $link = Wallet::resumeLink($token);
         $fee = Wallet::money(Wallet::feeKobo());
@@ -325,7 +326,7 @@ final class ApplicationsController
             ? "Hi {$idea['name']},\n\nThanks for visiting us! We've started your application" . ($idea['title'] ? " for {$idea['title']}" : '') . ".\n\nFinish it, pay the {$fee} commitment fee and submit it here:\n{$link}\n\nYour reference is {$idea['ref']}. Keep this link private: anyone with it can edit your application.\n\nAI Project Connect"
             : "Hi" . ($idea['name'] ? " {$idea['name']}" : '') . ",\n\nYour application" . ($idea['title'] ? " for {$idea['title']}" : '') . " is saved. Continue where you stopped:\n{$link}\n\nTo submit it you'll need to pay the {$fee} commitment fee. Your reference is {$idea['ref']}. Keep this link private: anyone with it can edit your application.\n\nAI Project Connect";
         Notifier::email('client', $idea['email'], 'Continue your application', $body);
-        if ($walkIn && !empty($idea['phone'])) {
+        if (($withSms ?? $walkIn) && !empty($idea['phone'])) {
             Notifier::sms('client', $idea['phone'], "AI Project Connect: finish your idea application and pay the {$fee} commitment fee from the link we emailed to {$idea['email']}. Ref {$idea['ref']}.");
         }
     }

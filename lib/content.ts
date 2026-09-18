@@ -1,6 +1,8 @@
 "use client";
 
-import { createDocument } from "./collection";
+import { useMemo } from "react";
+import { api } from "./api";
+import { invalidate, useApi } from "./remote";
 import { STAGES } from "./data";
 import type { StageKey } from "./types";
 
@@ -163,13 +165,47 @@ export const DEFAULT_CONTENT = {
 
 export type SiteContent = typeof DEFAULT_CONTENT;
 
-const doc = createDocument<SiteContent>("apc-cms-content-v1", DEFAULT_CONTENT);
+const CONTENT_KEY = "/content";
 
-export const useSiteContent = () => doc.useDoc();
-export const readSiteContent = () => doc.read();
-export const publishSiteContent = (next: SiteContent) => doc.set(next);
-export const resetSiteContent = () => doc.reset();
+/** Last content loaded from the server, so non-React code can read it synchronously. */
+let snapshot: SiteContent = DEFAULT_CONTENT;
 
+/** Server content merged over the defaults, so a new field works before it is saved. */
+function merge(saved: Partial<SiteContent> | undefined): SiteContent {
+  if (!saved) return DEFAULT_CONTENT;
+  const out = { ...DEFAULT_CONTENT } as Record<string, unknown>;
+  for (const [key, value] of Object.entries(saved)) {
+    const fallback = (DEFAULT_CONTENT as Record<string, unknown>)[key];
+    out[key] = fallback && value && typeof fallback === "object" && !Array.isArray(fallback) ? { ...(fallback as object), ...(value as object) } : value;
+  }
+  snapshot = out as SiteContent;
+  return snapshot;
+}
+
+export function useSiteContent(): SiteContent {
+  const { data } = useApi<Partial<SiteContent>>(CONTENT_KEY);
+  return useMemo(() => merge(data), [data]);
+}
+
+/** The same content with its loading and error state, for the editor. */
+export function useSiteContentState() {
+  const { data, loading, error, refresh } = useApi<Partial<SiteContent>>(CONTENT_KEY);
+  return { content: useMemo(() => merge(data), [data]), loaded: data !== undefined, loading, error, refresh };
+}
+
+/** Only current once the content has loaded at least once; components should use useSiteContent. */
+export const readSiteContent = () => snapshot;
+
+export async function publishSiteContent(next: SiteContent) {
+  await api.put("/admin/content", next);
+  snapshot = next;
+  await invalidate(CONTENT_KEY);
+}
+
+export async function resetSiteContent() {
+  await api.post("/admin/content/reset");
+  await invalidate(CONTENT_KEY);
+}
 /** Plain-language stage meaning as edited by admins. */
 export function stageMeaning(stage: StageKey) {
   return readSiteContent().portal.stageMeanings?.[stage] || STAGES[stage].meaning;

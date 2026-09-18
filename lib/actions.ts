@@ -1,194 +1,255 @@
 "use client";
 
 /**
- * Actions that cross between the Client Portal and the Engineering Panel.
- * Each one updates shared data, logs activity and queues the email/SMS the
- * PRD says should go out (NT-01 to NT-03), so both sides always agree.
+ * Everything the two sides *do* to a project.
+ *
+ * The Engineering Panel posts updates, moves stages, tags the stack, keeps
+ * milestones and the team, shares files and replies. The Client Portal asks
+ * questions, approves milestones, asks about courses, rates the work and
+ * uploads files. Both talk to the PHP API in backend/.
+ *
+ * Every function is async and returns whatever the server sent back. The server
+ * writes the activity log and queues the email/SMS the PRD asks for (NT-01 to
+ * NT-03), so nothing is recorded here — we only refresh the cached project
+ * afterwards so both panels show the same thing.
  */
-import { STAGES } from "./data";
-import { findCourse, findTechnology } from "./catalog";
-import { stageMeaning } from "./content";
-import { findIdea, newProjectCode, readIdeas, updateIdea, type Idea } from "./ideas";
-import { addLead, addProject, findProject, notifyClient, notifyStaff, readProjects, recordCourseEvent, sendNotice, uid, updateProject, withActivity } from "./store";
-import type { Person, Project, SharedFile, StageKey, Update } from "./types";
-import { formatBytes } from "./files";
+import { api, formData } from "./api";
+import { refreshLeads, refreshProjects } from "./store";
+import type { Person, Project, StageKey, Update } from "./types";
 
-const staffEmail = (p: Person) => `${p.name} · ${p.name.split(" ")[0].toLowerCase()}@aptech.dev`;
+/** Rows come back with numeric ids; the shared types in lib/types.ts still call them strings. */
+export type Id = string | number;
 
-/* ---------- client → team ---------- */
+const staffProject = (code: string) => `/staff/projects/${encodeURIComponent(code)}`;
+const clientProject = (code: string) => `/client/projects/${encodeURIComponent(code)}`;
 
-export function postClientMessage(p: Project, text: string) {
-  updateProject(p.code, (proj) =>
-    withActivity(
-      { ...proj, messages: [...(proj.messages ?? []), { id: uid(), at: new Date().toISOString(), from: "client", author: proj.client.name, text }] },
-      `${proj.client.name} (Client)`,
-      "Sent a message to the team",
-    ),
-  );
-  notifyStaff(staffEmail(p.lead), `New question from ${p.client.name} · ${p.title}`, text, p.code);
+/* ================= team → project (Engineering Panel) ================= */
+
+export interface UpdateInput {
+  title: string;
+  body: string;
+  visibility: "client" | "internal";
+  demoLink?: string;
+  /** One of the built-in preview pictures — not a file upload. */
+  screenshot?: Update["screenshot"];
 }
 
-export function approveMilestoneAsClient(p: Project, milestoneId: string) {
-  const m = p.milestones.find((x) => x.id === milestoneId);
-  if (!m) return;
-  const now = new Date().toISOString();
-  updateProject(p.code, (proj) =>
-    withActivity(
-      { ...proj, milestones: proj.milestones.map((x) => (x.id === milestoneId ? { ...x, clientApprovedAt: now, completedAt: x.completedAt ?? now } : x)) },
-      `${proj.client.name} (Client)`,
-      `Approved milestone "${m.title}"`,
-    ),
-  );
-  notifyStaff(staffEmail(p.lead), `${p.client.name} approved "${m.title}"`, `The client signed off "${m.title}" on ${p.title}.`, p.code);
-}
-
-export function requestCourse(p: Project, techId: string, type: "info" | "enrol") {
-  const tech = findTechnology(techId);
-  const course = tech ? findCourse(tech.courseId) : undefined;
-  if (!tech || !course) return;
-  addLead({ projectCode: p.code, projectTitle: p.title, clientName: p.client.name, techId, courseId: course.id, type, source: "portal" });
-  recordCourseEvent(type === "enrol" ? "enrol" : "request", course.id, techId, p.code);
-  sendNotice({
-    audience: "counsellor",
-    channel: "email",
-    to: "Admissions team · admissions@aptech.dev",
-    subject: `New ${type === "enrol" ? "enrolment" : "info request"}: ${course.title}`,
-    body: `${p.client.name} (${p.title}) clicked "${type === "enrol" ? "Enrol" : "Request info"}" on ${tech.name}.`,
-    projectCode: p.code,
+/**
+ * Posts a progress update or an internal note (EN-03, EN-06).
+ * An engineer's client-visible update comes back `pending` until a lead approves it.
+ */
+export async function postUpdate(code: string, input: UpdateInput) {
+  const update = await api.post<Update>(`${staffProject(code)}/updates`, {
+    title: input.title.trim(),
+    body: input.body.trim(),
+    visibility: input.visibility,
+    demoLink: input.demoLink?.trim() || null,
+    screenshot: input.screenshot ?? null,
   });
+  await refreshProjects();
+  return update;
 }
 
-/** Enquiry from the public courses section (no project yet). */
-export function requestCourseEnquiry(courseId: string, type: "info" | "enrol", name: string, contact: string) {
-  const course = findCourse(courseId);
-  if (!course) return;
-  addLead({ projectCode: "", projectTitle: "Website visitor", clientName: name, contact, techId: "", courseId, type, source: "website" });
-  recordCourseEvent(type === "enrol" ? "enrol" : "request", courseId);
-  sendNotice({
-    audience: "counsellor",
-    channel: "email",
-    to: "Admissions team · admissions@aptech.dev",
-    subject: `New ${type === "enrol" ? "enrolment" : "info request"} from the website: ${course.title}`,
-    body: `${name} (${contact}) asked about ${course.title}.`,
+/** Lead or admin publishes an update an engineer submitted. */
+export async function approveUpdate(updateId: Id) {
+  const update = await api.post<Update>(`/staff/updates/${updateId}/approve`);
+  await refreshProjects();
+  return update;
+}
+
+/** Rejects a pending update or removes a published one. Stage records are kept for the audit trail. */
+export async function deleteUpdate(updateId: Id) {
+  await api.del(`/staff/updates/${updateId}`);
+  await refreshProjects();
+}
+
+/** Moves the stage and progress (EN-02). The server writes the client update and emails them. */
+export async function changeStage(code: string, stage: StageKey, progress?: number, holdReason?: string) {
+  const project = await api.put<Project>(`${staffProject(code)}/stage`, {
+    stage,
+    progress: progress ?? null,
+    holdReason: holdReason?.trim() || null,
   });
+  await refreshProjects();
+  return project;
 }
 
-export function setPromosOptOut(p: Project, optOut: boolean) {
-  updateProject(p.code, (proj) => withActivity({ ...proj, promosOptOut: optOut }, `${proj.client.name} (Client)`, optOut ? "Turned off course suggestions" : "Turned on course suggestions"));
+/** Edits the headline details: title, tagline, category, platforms, budget and dates. */
+export async function editProjectDetails(
+  code: string,
+  patch: { title?: string; tagline?: string; category?: string; platforms?: string; budget?: string; startDate?: string; targetDate?: string },
+) {
+  const project = await api.patch<Project>(staffProject(code), patch);
+  await refreshProjects();
+  return project;
 }
 
-export function rateProject(p: Project, stars: number, text?: string) {
-  updateProject(p.code, (proj) => withActivity({ ...proj, rating: { stars, text, at: new Date().toISOString() } }, `${proj.client.name} (Client)`, `Rated the project ${stars}/5`));
-  notifyStaff(staffEmail(p.lead), `${p.client.name} rated ${p.title} ${stars}/5`, text || "No written testimonial.", p.code);
+/* ---------- tech stack (EN-04) ---------- */
+
+/** Tags a technology from the managed list, with a plain-language note on what it's for. */
+export async function addTechnology(code: string, techId: string, usage: string) {
+  const entry = await api.post<{ techId: string; usage: string }>(`${staffProject(code)}/technologies`, { techId, usage: usage.trim() });
+  await refreshProjects();
+  return entry;
 }
 
-/* ---------- team → client ---------- */
-
-export function postTeamReply(p: Project, author: Person, text: string) {
-  updateProject(p.code, (proj) =>
-    withActivity({ ...proj, messages: [...(proj.messages ?? []), { id: uid(), at: new Date().toISOString(), from: "team", author: author.name, text }] }, author, "Replied to the client"),
-  );
-  notifyClient(p, `${author.name} replied about ${p.title}`, text, "email");
+export async function removeTechnology(code: string, techId: string) {
+  await api.del(`${staffProject(code)}/technologies/${encodeURIComponent(techId)}`);
+  await refreshProjects();
 }
 
-export function announceUpdate(p: Project, u: Pick<Update, "title" | "body">) {
-  notifyClient(p, `New update on ${p.title}: ${u.title}`, `${u.body}\n\nSign in with your Project ID to see more.`);
+/* ---------- milestones (EN-05) ---------- */
+
+/** `dueDate` is YYYY-MM-DD. */
+export async function addMilestone(code: string, input: { title: string; dueDate: string; needsClientApproval?: boolean }) {
+  const created = await api.post<{ id: number }>(`${staffProject(code)}/milestones`, {
+    title: input.title.trim(),
+    dueDate: input.dueDate,
+    needsClientApproval: input.needsClientApproval ?? false,
+  });
+  await refreshProjects();
+  return created;
 }
 
-export function announceStage(p: Project, stage: StageKey, reason?: string) {
-  notifyClient(p, `${p.title} is now: ${STAGES[stage].label}`, reason ?? stageMeaning(stage));
+export async function updateMilestone(milestoneId: Id, patch: { title?: string; dueDate?: string; completed?: boolean; needsClientApproval?: boolean }) {
+  const saved = await api.patch<{ id: number }>(`/staff/milestones/${milestoneId}`, patch);
+  await refreshProjects();
+  return saved;
 }
 
-export function regenerateProjectCode(p: Project, actor: Person): string {
-  const code = newProjectCode([]);
-  updateProject(p.code, (proj) =>
-    withActivity({ ...proj, code, revokedCodes: [...(proj.revokedCodes ?? []), proj.code] }, actor, `Regenerated Project ID (${proj.code} → ${code}). Old ID revoked.`),
-  );
-  const idea = readIdeas().find((i) => i.projectCode === p.code);
-  if (idea) updateIdea(idea.id, { projectCode: code });
-  notifyClient({ ...p, code }, "Your Project ID has changed", `For your security we issued a new Project ID: ${code}. Your old ID no longer works.`);
-  return code;
+export async function deleteMilestone(milestoneId: Id) {
+  await api.del(`/staff/milestones/${milestoneId}`);
+  await refreshProjects();
 }
 
-export function assignMember(p: Project, person: Person, actor: Person) {
-  if (p.team.some((m) => m.name === person.name)) return;
-  updateProject(p.code, (proj) => withActivity({ ...proj, team: [...proj.team, person] }, actor, `Assigned ${person.name} (${person.role})`));
-  notifyStaff(staffEmail(person), `You've been assigned to ${p.title}`, `${actor.name} added you to ${p.title} (${p.code}).`, p.code);
+/* ---------- team (AD-06) ---------- */
+
+/** Assigns an active team member; the server emails them. */
+export async function assignMember(code: string, userId: number) {
+  const person = await api.post<Person>(`${staffProject(code)}/members`, { userId });
+  await refreshProjects();
+  return person;
 }
 
-export function removeMember(p: Project, person: Person, actor: Person) {
-  updateProject(p.code, (proj) => withActivity({ ...proj, team: proj.team.filter((m) => m.name !== person.name) }, actor, `Removed ${person.name} from the team`));
+/** The current lead can't be removed — change the lead first. */
+export async function removeMember(code: string, userId: number) {
+  await api.del(`${staffProject(code)}/members/${userId}`);
+  await refreshProjects();
 }
 
-export function changeLead(p: Project, lead: Person, actor: Person) {
-  updateProject(p.code, (proj) =>
-    withActivity({ ...proj, lead, team: proj.team.some((m) => m.name === lead.name) ? proj.team : [lead, ...proj.team] }, actor, `Changed project lead to ${lead.name}`),
-  );
-  notifyStaff(staffEmail(lead), `You're now leading ${p.title}`, `${actor.name} made you project lead for ${p.title} (${p.code}).`, p.code);
+/** Admin only. The new lead is added to the team if they weren't already. */
+export async function changeLead(code: string, userId: number) {
+  const person = await api.put<Person>(`${staffProject(code)}/lead`, { userId });
+  await refreshProjects();
+  return person;
 }
 
-export function shareFile(p: Project, file: Omit<SharedFile, "id" | "date">, actor: Person) {
-  updateProject(p.code, (proj) =>
-    withActivity({ ...proj, files: [{ ...file, id: uid(), date: new Date().toISOString(), uploadedBy: actor.name }, ...proj.files] }, actor, `Shared file ${file.name}`),
-  );
-  notifyClient(p, `New file shared on ${p.title}`, `${file.name} is ready to view and download in your portal.`, "email");
+/* ---------- files (EN-08) ---------- */
+
+/** Shares a document with the client. The server stores it outside the web root and emails them. */
+export async function shareFile(code: string, file: File, kind: "proposal" | "design" | "doc" = "doc") {
+  const shared = await api.post<{ id: number; name: string; size: string }>(`${staffProject(code)}/files`, formData({ file, kind }));
+  await refreshProjects();
+  return shared;
 }
 
-export function removeFile(p: Project, fileId: string, actor: Person) {
-  const f = p.files.find((x) => x.id === fileId);
-  updateProject(p.code, (proj) => withActivity({ ...proj, files: proj.files.filter((x) => x.id !== fileId) }, actor, `Removed file ${f?.name ?? ""}`));
+export async function removeFile(fileId: Id) {
+  await api.del(`/staff/project-files/${fileId}`);
+  await refreshProjects();
 }
 
-/* ---------- ideas → projects ---------- */
+/* ---------- Project ID & messages (AD-08, NT-02) ---------- */
 
-export function convertIdeaToProject(idea: Idea, lead: Person, targetDate: string, actor: Person, notes?: string): string {
-  const code = newProjectCode(readProjects().map((p) => p.code));
-  const now = new Date().toISOString();
-  const [first, second] = idea.name.split(" ");
-  const digits = idea.phone.replace(/\D/g, "");
-  const project: Project = withActivity(
-    {
-      code,
-      title: idea.title,
-      tagline: idea.problem.length > 90 ? `${idea.problem.slice(0, 87)}…` : idea.problem,
-      category: idea.category,
-      platforms: idea.platforms.join(" + "),
-      client: {
-        name: idea.name,
-        short: second ? `${first} ${second[0]}.` : first,
-        emailMasked: `${idea.email[0]}•••@${idea.email.split("@")[1]}`,
-        phoneMasked: `+${digits.slice(0, 3)} ••• ••• ${digits.slice(-4)}`,
-        email: idea.email,
-        phone: idea.phone,
-        organisation: idea.organisation,
-      },
-      lead,
-      team: [lead],
-      stage: "APPROVED",
-      progress: 5,
-      startDate: now,
-      targetDate: new Date(`${targetDate}T09:30:00`).toISOString(),
-      updates: [{ id: uid(), date: now, kind: "stage", author: lead, title: "Welcome! Your project is registered", body: stageMeaning("APPROVED") }],
-      milestones: [{ id: uid(), title: "Proposal & quote accepted", due: now, completedAt: now }],
-      stack: [],
-      files: idea.attachment
-        ? [{ id: uid(), name: idea.attachment.name, kind: "doc", size: formatBytes(idea.attachment.size), date: idea.submittedAt, uploadedBy: idea.name, blobId: idea.attachment.id, source: "client" }]
-        : [],
-      messages: [],
-    },
-    actor,
-    `Registered client & project from idea ${idea.ref}`,
-  );
-  addProject(project);
-  updateIdea(idea.id, { status: "ACCEPTED", projectCode: code, notes: notes ?? idea.notes });
-  notifyClient(project, "Welcome to AI Project Connect! Your Project ID", `Your project ${idea.title} is registered. Your Project ID is ${code}. Sign in at the portal with this ID and the one-time code we send you.`);
-  notifyStaff(staffEmail(lead), `You're leading a new project: ${idea.title}`, `${actor.name === "System" ? "The client accepted the quote online, registering" : `${actor.name} registered`} ${idea.title} (${code}) for ${idea.name}.`, code);
-  return code;
+/**
+ * Issues a new Project ID and revokes the old one (AD-08).
+ * Every client session is signed out and the client is emailed the new ID.
+ */
+export async function regenerateProjectCode(code: string) {
+  const result = await api.post<{ code: string; revoked: string }>(`${staffProject(code)}/regenerate-code`);
+  await refreshProjects();
+  return result;
 }
 
+export async function postTeamReply(code: string, text: string) {
+  const sent = await api.post<{ id: number }>(`${staffProject(code)}/messages`, { text: text.trim() });
+  await refreshProjects();
+  return sent;
+}
+
+/* ================= client → project (Client Portal) ================= */
+
+export async function postClientMessage(code: string, text: string) {
+  const sent = await api.post<{ id: number }>(`${clientProject(code)}/messages`, { text: text.trim() });
+  await refreshProjects();
+  return sent;
+}
+
+/** Design sign-off and other approvals the team asked for (CL-08). */
+export async function approveMilestoneAsClient(code: string, milestoneId: Id) {
+  const result = await api.post<{ approvedAt: string }>(`${clientProject(code)}/milestones/${milestoneId}/approve`);
+  await refreshProjects();
+  return result;
+}
+
+/** "Learn this stack" → Request info / Enrol (LS-03). Creates a counsellor lead. */
+export async function requestCourse(code: string, techId: string, type: "info" | "enrol") {
+  const lead = await api.post<{ id: number }>(`${clientProject(code)}/course-requests`, { techId, type });
+  await Promise.all([refreshProjects(), refreshLeads()]);
+  return lead;
+}
+
+/** Turns course suggestions on or off. Opting out never affects status access. */
+export async function setPromosOptOut(code: string, optOut: boolean) {
+  const prefs = await api.patch<{ promosOptOut: boolean; digestOptOut: boolean }>(`${clientProject(code)}/preferences`, { promosOptOut: optOut });
+  await refreshProjects();
+  return prefs;
+}
+
+/** Rating and testimonial, once the project is delivered (CL-10). */
+export async function rateProject(code: string, stars: number, text?: string) {
+  const rating = await api.post<{ stars: number }>(`${clientProject(code)}/rating`, { stars, text: text?.trim() || null });
+  await refreshProjects();
+  return rating;
+}
+
+/** The client shares content, logos or documents with their team (CL-06). */
+export async function clientUploadFile(code: string, file: File, note?: string) {
+  const uploaded = await api.post<{ id: number; name: string; size: string }>(`${clientProject(code)}/files`, formData({ file, note: note?.trim() || undefined }));
+  await refreshProjects();
+  return uploaded;
+}
+
+/** The client invites a colleague to the course behind one of their technologies (LS-08). */
+export async function inviteToCourse(code: string, input: { techId: string; name: string; email: string; message?: string }) {
+  const invite = await api.post<{ id: number }>(`${clientProject(code)}/course-invites`, {
+    techId: input.techId,
+    name: input.name.trim(),
+    email: input.email.trim().toLowerCase(),
+    message: input.message?.trim() || null,
+  });
+  await refreshLeads();
+  return invite;
+}
+
+/* ================= public ================= */
+
+/** Enquiry from the courses section of the website — no project and no sign-in. */
+export async function requestCourseEnquiry(courseId: string, type: "info" | "enrol", name: string, contact: string) {
+  const lead = await api.post<{ id: number }>("/course-enquiries", { courseId, type, name: name.trim(), contact: contact.trim() });
+  await refreshLeads();
+  return lead;
+}
+
+export interface IdeaStatus {
+  ref: string;
+  title: string;
+  status: "DRAFT" | "NEW" | "REVIEWING" | "QUOTE_SENT" | "ACCEPTED" | "DECLINED";
+  submittedAt: string | null;
+  /** True once the idea has become a project. The Project ID is never revealed here. */
+  projectRegistered: boolean;
+}
+
+/** The Tracker: "where is my idea?" by reference, with no sign-in. Throws if the reference is unknown. */
 export function lookupIdea(ref: string) {
-  const idea = findIdea(ref);
-  if (!idea) return undefined;
-  const project = idea.projectCode ? findProject(idea.projectCode) : undefined;
-  return { idea, project };
+  return api.get<IdeaStatus>(`/ideas/${encodeURIComponent(ref.trim().toUpperCase())}`);
 }

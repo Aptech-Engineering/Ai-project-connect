@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { MessageCircle, Send } from "lucide-react";
+import { Loader2, MessageCircle, Send } from "lucide-react";
 import { cn, initials, relativeDay } from "@/lib/format";
 import type { Message } from "@/lib/types";
 
@@ -21,10 +21,12 @@ export default function MessageThread({
   title: string;
   subtitle?: string;
   placeholder: string;
-  onSend: (text: string) => void;
+  /** Sending goes to the server, so this may be async; what was typed is only cleared once it resolves. */
+  onSend: (text: string) => void | Promise<void>;
   className?: string;
 }) {
   const [text, setText] = useState("");
+  const [sending, setSending] = useState(false);
   const listRef = useRef<HTMLOListElement>(null);
   const last = messages[messages.length - 1];
   const awaitingReply = last && last.from !== viewer;
@@ -33,12 +35,19 @@ export default function MessageThread({
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
   }, [messages.length]);
 
-  const submit = (e: React.FormEvent) => {
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     const t = text.trim();
-    if (!t) return;
-    onSend(t);
-    setText("");
+    if (!t || sending) return;
+    setSending(true);
+    try {
+      await onSend(t);
+      setText("");
+    } catch {
+      // The caller has already told the person what went wrong; keep what they typed.
+    } finally {
+      setSending(false);
+    }
   };
 
   return (
@@ -108,14 +117,16 @@ export default function MessageThread({
           onChange={(e) => setText(e.target.value)}
           placeholder={placeholder}
           aria-label={placeholder}
-          className="h-11 flex-1 rounded-xl border border-line bg-white px-4 text-sm outline-none transition focus:border-brand focus:ring-4 focus:ring-brand/15"
+          disabled={sending}
+          className="h-11 flex-1 rounded-xl border border-line bg-white px-4 text-sm outline-none transition focus:border-brand focus:ring-4 focus:ring-brand/15 disabled:opacity-60"
         />
         <button
           type="submit"
-          disabled={!text.trim()}
+          disabled={!text.trim() || sending}
           className="flex h-11 items-center justify-center gap-2 rounded-xl bg-navy px-5 text-sm font-bold text-white transition hover:bg-navy-700 disabled:opacity-40"
         >
-          <Send className="size-4" /> Send
+          {sending ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
+          {sending ? "Sending…" : "Send"}
         </button>
       </form>
     </div>

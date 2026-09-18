@@ -2,16 +2,24 @@
 
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion, useAnimationControls } from "framer-motion";
-import { AlertCircle, ArrowDown, ArrowLeft, ArrowRight, CheckCircle2, Clock, Lightbulb, Loader2, Lock, Search, ShieldCheck, Wallet, XCircle } from "lucide-react";
-import { feeState, paidPayment } from "@/lib/wallet";
-import { formatPrice } from "@/lib/catalog";
-import { DEMO_IDS, DEMO_OTP, STAGES } from "@/lib/data";
-import { findProject, findRevoked } from "@/lib/store";
+import { AlertCircle, ArrowDown, ArrowLeft, ArrowRight, CheckCircle2, Clock, Lightbulb, Loader2, Lock, Search, ShieldCheck, XCircle } from "lucide-react";
+import { STAGES } from "@/lib/data";
+import { requestClientCode, verifyClientCode } from "@/lib/store";
 import { lookupIdea } from "@/lib/actions";
-import { IDEA_STATUSES, type Idea } from "@/lib/ideas";
+import { errorMessage } from "@/lib/api";
+import { IDEA_STATUSES, type IdeaStatus } from "@/lib/ideas";
 import type { Project } from "@/lib/types";
 import { cn } from "@/lib/format";
 import { useSiteContent } from "@/lib/content";
+
+/** What the public idea-status endpoint returns: no payment or quote details. */
+export interface PublicIdea {
+  ref: string;
+  title: string;
+  status: IdeaStatus;
+  submittedAt?: string | null;
+  projectRegistered?: boolean;
+}
 
 const ID_PATTERN = /^APC-\d{2}-[A-Z0-9]{5}$/;
 const IDEA_PATTERN = /^IDEA-[A-Z0-9]{5}$/;
@@ -39,8 +47,8 @@ export default function Tracker({
   onReset: () => void;
   verifiedProject?: Project;
 }) {
-  const [candidate, setCandidate] = useState<Project | null>(null);
-  const [idea, setIdea] = useState<{ idea: Idea; project?: Project } | null>(null);
+  const [candidate, setCandidate] = useState<Candidate | null>(null);
+  const [idea, setIdea] = useState<PublicIdea | null>(null);
   const step = verifiedProject ? "done" : candidate ? "otp" : idea ? "idea" : "id";
 
   return (
@@ -58,16 +66,16 @@ export default function Tracker({
               <IdeaStep
                 result={idea}
                 onBack={() => setIdea(null)}
-                onTrack={(p) => {
+                onTrack={(candidateFromIdea) => {
                   setIdea(null);
-                  setCandidate(p);
+                  setCandidate(candidateFromIdea);
                 }}
               />
             </motion.div>
           )}
           {step === "otp" && candidate && (
             <motion.div key="otp" {...panel}>
-              <OtpStep project={candidate} onBack={() => setCandidate(null)} onVerified={() => onVerified(candidate.code)} />
+              <OtpStep candidate={candidate} onBack={() => setCandidate(null)} onVerified={() => onVerified(candidate.code)} />
             </motion.div>
           )}
           {step === "done" && verifiedProject && (
@@ -81,7 +89,16 @@ export default function Tracker({
   );
 }
 
-function IdStep({ onFound, onIdea }: { onFound: (p: Project) => void; onIdea: (r: { idea: Idea; project?: Project }) => void }) {
+/** A Project ID that exists: the server has sent a one-time code to the client. */
+export interface Candidate {
+  code: string;
+  title?: string;
+  sentTo?: { email?: string; phone?: string };
+  /** Only outside production, so the demo can show the code. */
+  devCode?: string;
+}
+
+function IdStep({ onFound, onIdea }: { onFound: (c: Candidate) => void; onIdea: (idea: PublicIdea) => void }) {
   const { hero } = useSiteContent();
   const [value, setValue] = useState("");
   const [error, setError] = useState("");
@@ -132,19 +149,22 @@ function IdStep({ onFound, onIdea }: { onFound: (p: Project) => void; onIdea: (r
       return fail("Project IDs look like APC-26-7KQ9X, and idea references look like IDEA-4QX7M. Check your email or SMS.", false);
     setBusy(true);
     setError("");
-    window.setTimeout(() => {
-      setBusy(false);
-      if (isIdea) {
-        const result = lookupIdea(id);
-        if (result) onIdea(result);
-        else fail(`We couldn't find an idea with reference ${id}.`, true);
-        return;
+    void (async () => {
+      try {
+        if (isIdea) {
+          const result = await lookupIdea(id);
+          onIdea(result);
+          return;
+        }
+        // The server checks the ID exists and sends the one-time code.
+        const sent = await requestClientCode(id);
+        onFound({ code: id, sentTo: sent.sentTo, devCode: sent.devCode });
+      } catch (err) {
+        fail(errorMessage(err), true);
+      } finally {
+        setBusy(false);
       }
-      const p = findProject(id);
-      if (p) onFound(p);
-      else if (findRevoked(id)) fail(`${id} has been replaced with a new Project ID for security. Check your latest email or SMS.`, true);
-      else fail(`We couldn't find a project with ID ${id}. Check for typos and try again.`, true);
-    }, 900);
+    })();
   };
 
   return (
@@ -224,31 +244,16 @@ function IdStep({ onFound, onIdea }: { onFound: (p: Project) => void; onIdea: (r
         </AnimatePresence>
       </div>
 
-      {hero.showDemoIds && (
-      <div className="flex flex-wrap items-center gap-2 px-3 pb-2 pt-3">
-        <span className="text-xs text-white/50">Try a demo ID:</span>
-        {DEMO_IDS.map((d) => (
-          <button
-            key={d.code}
-            type="button"
-            onClick={() => lookup(d.code)}
-            title={`${d.title} · ${STAGES[d.stage].label}`}
-            className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 font-mono text-[11px] text-white/80 transition hover:border-brand/60 hover:bg-brand/10 hover:text-white"
-          >
-            {d.code}
-          </button>
-        ))}
-      </div>
-      )}
     </form>
   );
 }
 
-function OtpStep({ project, onBack, onVerified }: { project: Project; onBack: () => void; onVerified: () => void }) {
+function OtpStep({ candidate, onBack, onVerified }: { candidate: Candidate; onBack: () => void; onVerified: () => void }) {
   const [digits, setDigits] = useState<string[]>(Array(6).fill(""));
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [resendIn, setResendIn] = useState(30);
+  const [devCode, setDevCode] = useState(candidate.devCode);
   const shake = useAnimationControls();
   const refs = useRef<(HTMLInputElement | null)[]>([]);
 
@@ -265,17 +270,18 @@ function OtpStep({ project, onBack, onVerified }: { project: Project; onBack: ()
   const verify = (code: string) => {
     setBusy(true);
     setError("");
-    window.setTimeout(() => {
-      if (code === DEMO_OTP) {
+    void (async () => {
+      try {
+        await verifyClientCode(candidate.code, code);
         onVerified();
-        return;
+      } catch (err) {
+        setBusy(false);
+        shake.start({ x: [0, -10, 10, -7, 7, -3, 0], transition: { duration: 0.45 } });
+        setError(errorMessage(err));
+        setDigits(Array(6).fill(""));
+        refs.current[0]?.focus();
       }
-      setBusy(false);
-      shake.start({ x: [0, -10, 10, -7, 7, -3, 0], transition: { duration: 0.45 } });
-      setError("That code isn't right. Please check the message and try again.");
-      setDigits(Array(6).fill(""));
-      refs.current[0]?.focus();
-    }, 900);
+    })();
   };
 
   const fill = (start: number, str: string) => {
@@ -321,8 +327,21 @@ function OtpStep({ project, onBack, onVerified }: { project: Project; onBack: ()
             <ShieldCheck className="size-5 text-teal" /> Confirm it&apos;s you
           </p>
           <p className="mt-1 text-sm text-white/60">
-            We sent a 6-digit code to <span className="text-white">{project.client.emailMasked}</span> and{" "}
-            <span className="whitespace-nowrap text-white">{project.client.phoneMasked}</span>
+            We sent a 6-digit code to{" "}
+            {candidate.sentTo?.email ? (
+              <>
+                <span className="text-white">{candidate.sentTo.email}</span>
+                {candidate.sentTo.phone && (
+                  <>
+                    {" "}
+                    and <span className="whitespace-nowrap text-white">{candidate.sentTo.phone}</span>
+                  </>
+                )}
+              </>
+            ) : (
+              "the email and phone on this project"
+            )}
+            .
           </p>
         </div>
         <button onClick={onBack} className="flex shrink-0 items-center gap-1 rounded-full px-2 py-1 text-xs text-white/60 hover:text-white">
@@ -331,7 +350,7 @@ function OtpStep({ project, onBack, onVerified }: { project: Project; onBack: ()
       </div>
 
       <p className="mt-3 inline-flex items-center gap-2 rounded-lg bg-white/5 px-2.5 py-1 font-mono text-xs text-white/70">
-        {project.code}
+        {candidate.code}
       </p>
 
       <motion.div
@@ -381,16 +400,22 @@ function OtpStep({ project, onBack, onVerified }: { project: Project; onBack: ()
       </div>
 
       <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-white/10 pt-3 text-xs">
-        <button
-          onClick={() => fill(0, DEMO_OTP)}
-          disabled={busy}
-          className="rounded-full bg-teal/15 px-3 py-1.5 font-bold text-teal transition hover:bg-teal/25"
-        >
-          Demo: use code {DEMO_OTP}
-        </button>
+        {devCode ? (
+          <button onClick={() => fill(0, devCode)} disabled={busy} className="rounded-full bg-teal/15 px-3 py-1.5 font-bold text-teal transition hover:bg-teal/25">
+            Demo: use code {devCode}
+          </button>
+        ) : (
+          <span className="text-white/40">The code expires in a few minutes.</span>
+        )}
         <button
           disabled={resendIn > 0 || busy}
-          onClick={() => setResendIn(30)}
+          onClick={() => {
+            setResendIn(30);
+            setError("");
+            void requestClientCode(candidate.code)
+              .then((sent) => sent.devCode && setDevCode(sent.devCode))
+              .catch((err) => setError(errorMessage(err)));
+          }}
           className="text-white/60 hover:text-white disabled:cursor-default disabled:hover:text-white/60"
         >
           {resendIn > 0 ? `Resend code in ${resendIn}s` : "Resend code"}
@@ -432,7 +457,7 @@ function DoneStep({ project, onReset }: { project: Project; onReset: () => void 
   );
 }
 
-const IDEA_MESSAGES: Record<Idea["status"], string> = {
+const IDEA_MESSAGES: Record<PublicIdea["status"], string> = {
   DRAFT: "This application isn't submitted yet. Use the link we emailed you to finish it and fund your project wallet.",
   NEW: "We've received your idea. Our team will start reviewing it shortly.",
   REVIEWING: "Our engineers are assessing your idea and choosing the right tech stack.",
@@ -441,50 +466,30 @@ const IDEA_MESSAGES: Record<Idea["status"], string> = {
   DECLINED: "We're not able to take on this idea right now. Check your email for details.",
 };
 
-/** Commitment fee status for the idea tracker. */
-function FeeLine({ idea }: { idea: Idea }) {
-  const paid = paidPayment(idea);
-  const state = feeState(idea);
-  const text = paid?.refund
-    ? paid.refund.status === "REFUNDED"
-      ? `Your ${formatPrice(paid.amount, paid.currency)} commitment fee was refunded.`
-      : `Your ${formatPrice(paid.amount, paid.currency)} commitment fee is being refunded.`
-    : state === "PAID"
-      ? `Commitment fee paid · receipt ${paid?.receiptNo}`
-      : state === "AWAITING_CONFIRMATION"
-        ? "We're confirming your commitment fee transfer."
-        : idea.status === "DRAFT"
-          ? "Commitment fee not paid yet."
-          : null;
-  if (!text) return null;
-  return (
-    <p className="mt-3 flex items-center gap-2 rounded-xl bg-white/5 px-3 py-2 text-xs text-white/70">
-      <Wallet className="size-4 shrink-0 text-brand" /> {text}
-    </p>
-  );
-}
+function IdeaStep({ result, onBack, onTrack }: { result: PublicIdea; onBack: () => void; onTrack: (c: Candidate) => void }) {
+  const [code, setCode] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const steps: PublicIdea["status"][] = ["NEW", "REVIEWING", "QUOTE_SENT", "ACCEPTED"];
+  const current = steps.indexOf(result.status);
 
-function IdeaStep({ result, onBack, onTrack }: { result: { idea: Idea; project?: Project }; onBack: () => void; onTrack: (p: Project) => void }) {
-  const { idea, project } = result;
-  const steps: Idea["status"][] = ["NEW", "REVIEWING", "QUOTE_SENT", "ACCEPTED"];
-  const current = steps.indexOf(idea.status);
   return (
     <div className="p-3">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="flex items-center gap-2 font-display font-semibold text-white">
-            <Lightbulb className="size-5 text-brand" /> {idea.title}
+            <Lightbulb className="size-5 text-brand" /> {result.title || "Your idea"}
           </p>
-          <p className="mt-0.5 font-mono text-xs text-white/50">{idea.ref}</p>
+          <p className="mt-0.5 font-mono text-xs text-white/50">{result.ref}</p>
         </div>
         <button onClick={onBack} className="flex shrink-0 items-center gap-1 rounded-full px-2 py-1 text-xs text-white/60 hover:text-white">
           <ArrowLeft className="size-3.5" /> Back
         </button>
       </div>
 
-      {idea.status === "DECLINED" || idea.status === "DRAFT" ? (
+      {result.status === "DECLINED" || result.status === "DRAFT" ? (
         <p className="mt-4 flex items-center gap-2 rounded-xl bg-white/5 p-3 text-sm text-white/80">
-          {idea.status === "DRAFT" ? <Clock className="size-5 shrink-0 text-brand" /> : <XCircle className="size-5 shrink-0 text-[#ffb4a8]" />} {IDEA_MESSAGES[idea.status]}
+          {result.status === "DRAFT" ? <Clock className="size-5 shrink-0 text-brand" /> : <XCircle className="size-5 shrink-0 text-[#ffb4a8]" />} {IDEA_MESSAGES[result.status]}
         </p>
       ) : (
         <>
@@ -497,29 +502,42 @@ function IdeaStep({ result, onBack, onTrack }: { result: { idea: Idea; project?:
             ))}
           </ol>
           <p className="mt-4 flex items-start gap-2 text-sm text-white/80">
-            {idea.status === "ACCEPTED" ? <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-teal" /> : <Clock className="mt-0.5 size-4 shrink-0 text-brand" />}
-            {IDEA_MESSAGES[idea.status]}
+            {result.status === "ACCEPTED" ? <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-teal" /> : <Clock className="mt-0.5 size-4 shrink-0 text-brand" />}
+            {IDEA_MESSAGES[result.status]}
           </p>
         </>
       )}
 
-      <FeeLine idea={idea} />
-
-      {idea.status === "QUOTE_SENT" && idea.quote?.status === "sent" && (
-        <div className="mt-4 flex flex-col gap-2 border-t border-white/10 pt-3 sm:flex-row sm:items-center sm:justify-between">
-          <span className="text-xs text-white/50">Your proposal was emailed to you. Demo: open it here.</span>
-          <a href={`/quote?ref=${encodeURIComponent(idea.ref)}&token=${encodeURIComponent(idea.quote.token)}`} className="flex items-center justify-center gap-1.5 rounded-xl bg-brand px-4 py-2.5 text-sm font-bold text-white hover:bg-brand-600">
-            Review proposal <ArrowRight className="size-4" />
-          </a>
-        </div>
-      )}
-      {project && (
-        <div className="mt-4 flex flex-col gap-2 border-t border-white/10 pt-3 sm:flex-row sm:items-center sm:justify-between">
-          <span className="text-xs text-white/50">Demo: the Project ID from that email is {project.code}</span>
-          <button onClick={() => onTrack(project)} className="flex items-center justify-center gap-1.5 rounded-xl bg-brand px-4 py-2.5 text-sm font-bold text-white hover:bg-brand-600">
-            Track project <ArrowRight className="size-4" />
-          </button>
-        </div>
+      {result.projectRegistered && (
+        <form
+          className="mt-4 border-t border-white/10 pt-3"
+          onSubmit={(e) => {
+            e.preventDefault();
+            const id = code.trim().toUpperCase();
+            if (!/^APC-\d{2}-[A-Z0-9]{5}$/.test(id)) return setError("Project IDs look like APC-26-7KQ9X.");
+            setBusy(true);
+            setError("");
+            void requestClientCode(id)
+              .then((sent) => onTrack({ code: id, sentTo: sent.sentTo, devCode: sent.devCode }))
+              .catch((err) => setError(errorMessage(err)))
+              .finally(() => setBusy(false));
+          }}
+        >
+          <p className="text-xs text-white/50">Your project is registered. Enter the Project ID from your email to track it.</p>
+          <div className="mt-2 flex flex-col gap-2 sm:flex-row">
+            <input
+              value={code}
+              onChange={(e) => setCode(e.target.value.toUpperCase())}
+              placeholder="APC-26-7KQ9X"
+              aria-label="Project ID"
+              className="h-11 flex-1 rounded-xl bg-white/10 px-3 font-mono text-sm text-white outline-none placeholder:text-white/30 focus:bg-white/15"
+            />
+            <button disabled={busy} className="flex h-11 items-center justify-center gap-1.5 rounded-xl bg-brand px-4 text-sm font-bold text-white hover:bg-brand-600 disabled:opacity-60">
+              {busy ? <Loader2 className="size-4 animate-spin" /> : <ArrowRight className="size-4" />} Track project
+            </button>
+          </div>
+          {error && <p className="mt-2 text-xs text-[#ffb4a8]">{error}</p>}
+        </form>
       )}
     </div>
   );

@@ -93,7 +93,7 @@ final class StaffAuthController
             $token = bin2hex(random_bytes(32));
             Database::run('DELETE FROM password_resets WHERE user_id = ? AND used_at IS NULL', [(int) $user['id']]);
             Database::insert('password_resets', ['user_id' => (int) $user['id'], 'token_hash' => hash('sha256', $token), 'expires_at' => date('Y-m-d H:i:s', time() + 3600)]);
-            $link = rtrim((string) Config::get('app.url'), '/') . '/engineering?reset=' . $token;
+            $link = \App\Support\Links::engineering(['reset' => $token]);
             Notifier::staff($user['email'], 'Reset your AI Project Connect password', "Hi {$user['name']},\n\nSomeone asked to reset the password for your staff account. Choose a new password here (the link expires in 1 hour and works once):\n{$link}\n\nIf this wasn't you, you can ignore this email.");
             if (Config::get('otp.expose_in_response') && !Config::isProduction()) {
                 $response['devToken'] = $token; // local testing only

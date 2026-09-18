@@ -6,11 +6,26 @@ It has no framework and needs no Composer packages on the server, so it runs on 
 The Next.js frontend is exported as static files and calls this API at `/api/...` on the same domain.
 
 ```
-yourdomain.com/          → Next.js static export (public_html)
+yourdomain.com/          → Client Portal        ┐
+yourdomain.com/apply     → idea application     │ Next.js static export (public_html)
+yourdomain.com/quote     → private quote link   │
+yourdomain.com/engineering → Engineering Panel  ┘
 yourdomain.com/api/...   → this API (public_html/api → ~/apc-backend)
                               ↓
                           MySQL + ~/apc-backend/storage/uploads
 ```
+
+Every link the back end emails or redirects to is built in `src/Support/Links.php` from `app.frontend_url`
+(falling back to `app.url`), with any trailing slash removed:
+
+| Link | Shape |
+|---|---|
+| Continue your application | `{frontend}/apply?resume=<64-char token>` |
+| Back from Paystack checkout | `{frontend}/apply?ref=IDEA-4QX7M&payment=success\|pending\|failed&reference=FEE-…` |
+| Private quote | `{frontend}/quote?ref=IDEA-4QX7M&token=<48-char token>` |
+| Staff password reset | `{frontend}/engineering?reset=<token>` |
+| Staff sign-in, weekly digest | `{frontend}/engineering`, `{frontend}` |
+| Paystack callback & webhook (API, always `app.url`) | `{api}/api/payments/paystack/callback`, `{api}/api/payments/paystack/webhook` |
 
 ## What's included
 
@@ -148,7 +163,7 @@ Values resolve as **settings table → `config/config.php` → built-in default*
 
 ## API reference
 
-All responses are JSON. Errors look like `{"error": "message", "errors": {"field": "message"}}` with status 400/401/403/404/422/429/500.
+All responses are UTF-8 JSON (`Content-Type: application/json; charset=utf-8`) — decode them as UTF-8, or bullets in masked contacts (`s•••@example.com`) and ₦ amounts turn into mojibake in the client. Errors look like `{"error": "message", "errors": {"field": "message"}}` with status 400/401/403/404/422/429/500.
 **Every POST/PUT/PATCH/DELETE must send `X-Requested-With: XMLHttpRequest`.** Sessions use an HttpOnly cookie, so the frontend must send requests with `credentials: 'include'`.
 
 ### Public
@@ -177,7 +192,7 @@ All responses are JSON. Errors look like `{"error": "message", "errors": {"field
 | POST | `/api/applications` | JSON or multipart: `email` (required) + any idea fields, optional `attachment` → 201 `{token, application}`; emails "Continue your application" |
 | GET | `/api/applications/draft?token=` | → `application` (also works after submission, to see the wallet) |
 | POST | `/api/applications/draft` | `{token, …partial fields, removeAttachment?}` (multipart for `attachment`) → `application`. 409 once submitted |
-| POST | `/api/applications/resume-links` | `{email}` → always `{message}`; emails links for every open draft (rate-limited per IP and per email) |
+| POST | `/api/applications/resume-links` | `{email}` → always `{message}`; emails links for every open draft (rate-limited per IP and per email). Staff resend one from the panel instead: `POST /api/staff/ideas/{id}/resume-link` |
 | POST | `/api/applications/pay/paystack` | `{token}` → 201 `{reference, authorizationUrl, accessCode, publicKey, email, amount, amountKobo, currency}`. Send the browser to `authorizationUrl` (or use Paystack Inline with `accessCode`) |
 | GET | `/api/payments/paystack/callback?reference=` | Paystack returns here; verifies with Paystack, then 302 → `/apply?ref=IDEA-…&payment=success\|pending\|failed&reference=…` (the page uses the token saved in the browser) |
 | POST | `/api/payments/paystack/webhook` | Paystack only. Raw body signed with `x-paystack-signature` (HMAC-SHA512 with the secret key). Handles `charge.success`, `refund.processed`, `refund.failed`. Idempotent. No `X-Requested-With` needed |
@@ -207,7 +222,7 @@ All responses are JSON. Errors look like `{"error": "message", "errors": {"field
 | POST | `/api/staff/auth/logout` | |
 | GET | `/api/staff/me` | |
 | POST | `/api/staff/me/password` | `{currentPassword, newPassword}` |
-| GET | `/api/staff/dashboard` | Admins also get `paymentsToConfirm`, `refundsPending` |
+| GET | `/api/staff/dashboard` | `{activeProjects, deliveredProjects, pendingApprovals, needsReply, avgDaysSinceClientUpdate, staleProjects[]}`; leads and admins also get `newIdeas`; counsellors and admins `newLeads`; admins also `notifications` (messages still **queued or failed** in the outbox — not every logged message), `paymentsToConfirm`, `refundsPending` |
 | GET | `/api/staff/users` | Active staff for assignment |
 | GET | `/api/staff/projects` | `?stage=&q=` |
 | GET / PATCH | `/api/staff/projects/{code}` | Detail / edit details |
@@ -225,7 +240,7 @@ All responses are JSON. Errors look like `{"error": "message", "errors": {"field
 | POST | `/api/staff/projects/{code}/messages` | `{text}` |
 | POST | `/api/staff/updates/{id}/approve` | |
 | DELETE | `/api/staff/updates/{id}` | |
-| GET | `/api/staff/approvals` | |
+| GET | `/api/staff/approvals` | Updates waiting for approval, each with `projectCode`, `projectTitle`, `leadName` and `canApprove` (true for admins and for the lead of that project, so the panel can disable the button instead of showing a 403) |
 | GET | `/api/staff/messages` | Conversation threads |
 | GET | `/api/staff/notifications` | Admin: `?audience=&status=` |
 | GET | `/api/staff/ideas` | `?status=&q=&payment=UNPAID\|PENDING\|AWAITING_CONFIRMATION\|PAID\|FAILED`. Drafts are excluded unless an admin sends `status=DRAFT` or `includeDrafts=1` (leads → 403). Each idea includes `source`, `createdAt`, `lastSavedAt`, `paymentStatus`, `payment` (plus `id`, proof `url`, `confirmedBy`, `confirmedAt`, `refundedBy`, `recordedBy`, `channel`) and `wallet` |
@@ -233,6 +248,7 @@ All responses are JSON. Errors look like `{"error": "message", "errors": {"field
 | POST | `/api/staff/ideas/{id}/convert` | Admin: `{leadId, targetDate, startDate?}`. 409 unless the fee is PAID |
 | POST | `/api/staff/ideas/{id}/quote` | Lead/admin: multipart quote. 409 unless the fee is PAID (accepting a quote online is blocked too if it isn't) |
 | POST | `/api/staff/walk-ins` | Admin: `{name, email, phone?, …any idea fields}` → 201 `{idea, sentTo}`; creates a DRAFT (`source: walk_in`) and emails/SMSes the client a link to finish and pay. Walk-in flow: this → `payments/centre` (or the client pays online/by transfer) → client completes and submits from the link → `convert` |
+| POST | `/api/staff/ideas/{id}/resume-link` | Admin: issues a fresh resume token for a DRAFT idea and emails/SMSes the client the link → `{sentTo, idea}` (plus `devLink` outside production). 409 once the application is submitted. Rate-limited per application (5/hour), not per IP, so a whole office can use it |
 | POST | `/api/staff/ideas/{id}/payments/centre` | Admin: fee paid at the centre `{amount?, senderName?, note?, refundAccountName?, refundAccountNumber?, refundBank?}` → 201 payment (PAID immediately, receipt emailed) |
 | GET | `/api/staff/payments` | Admin: `?status=&method=paystack\|manual&refund=open\|NONE\|PENDING\|PROCESSING\|REFUNDED&q=` → `{items: [payment + idea{id, ref, title, name, email, phone, status, source}], counts{awaitingConfirmation, refundsPending, refundsProcessing, paid, collected}}` |
 | POST | `/api/staff/payments/{id}/confirm` | Admin: confirm a bank transfer `{note?}` → PAID + receipt email (refund queued automatically if the idea was declined meanwhile) |
@@ -255,5 +271,5 @@ All responses are JSON. Errors look like `{"error": "message", "errors": {"field
 | PATCH / DELETE | `/api/admin/courses/{id}` | `flierId` = image id from `/api/admin/images` |
 | POST | `/api/admin/technologies` | |
 | PATCH / DELETE | `/api/admin/technologies/{id}` | |
-| GET / POST | `/api/admin/users` | |
+| GET / POST | `/api/admin/users` | GET adds `projectCount` to each user: active (non-`DELIVERED`) projects they lead or are on the team of |
 | PATCH | `/api/admin/users/{id}` | `{name?, phone?, role?, jobTitle?, status?, password?}` |

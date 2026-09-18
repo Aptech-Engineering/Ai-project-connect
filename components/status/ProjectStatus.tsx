@@ -22,8 +22,9 @@ import { ChangeRequestsPanel, EmailPreferences, HandoverPanel, WalletPanel } fro
 import StageBadge from "./StageBadge";
 import MessageThread from "../MessageThread";
 import { postClientMessage } from "@/lib/actions";
+import { errorMessage } from "@/lib/api";
 import { STAGES, clientUpdates } from "@/lib/data";
-import { useProjects } from "@/lib/store";
+import { useClientSession } from "@/lib/store";
 import { useSiteContent } from "@/lib/content";
 import { cn, daysFromNow, formatDate, initials, relativeDay } from "@/lib/format";
 import type { Project } from "@/lib/types";
@@ -48,7 +49,9 @@ export default function ProjectStatus({
   notify: Notify;
 }) {
   const [downloading, setDownloading] = useState(false);
-  const siblings = useProjects().filter((p) => p.client.name === project.client.name);
+  // The signed-in client's own projects, straight from the session.
+  const { session } = useClientSession();
+  const siblings = session?.projects ?? [];
   const { portal } = useSiteContent();
   const stage = { ...STAGES[project.stage], meaning: portal.stageMeanings?.[project.stage] || STAGES[project.stage].meaning };
   const lastUpdate = clientUpdates(project)[0];
@@ -59,10 +62,20 @@ export default function ProjectStatus({
       const { downloadProjectReport } = await import("@/lib/report");
       await downloadProjectReport(project);
       notify(`Status report for ${project.title} downloaded.`);
-    } catch {
-      notify("Sorry, the report couldn't be generated. Please try again.", "info");
+    } catch (e) {
+      notify(errorMessage(e), "info");
     } finally {
       setDownloading(false);
+    }
+  };
+
+  const sendMessage = async (text: string) => {
+    try {
+      await postClientMessage(project.code, text);
+      notify(`Message sent to ${project.lead.name}.`);
+    } catch (e) {
+      notify(errorMessage(e), "info");
+      throw e;
     }
   };
 
@@ -246,10 +259,7 @@ export default function ProjectStatus({
                   title="Questions for your team"
                   subtitle={`Ask ${project.lead.name.split(" ")[0]} anything. You'll get an email when they reply.`}
                   placeholder="e.g. Can buyers pay on delivery too?"
-                  onSend={(text) => {
-                    postClientMessage(project, text);
-                    notify(`Message sent to ${project.lead.name}.`);
-                  }}
+                  onSend={sendMessage}
                 />
                 <MilestonesPanel project={project} notify={notify} />
                 <ChangeRequestsPanel project={project} notify={notify} />

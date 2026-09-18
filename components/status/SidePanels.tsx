@@ -8,15 +8,29 @@ import type { Project, SharedFile } from "@/lib/types";
 import type { Notify } from "../PortalApp";
 import { approveMilestoneAsClient, rateProject } from "@/lib/actions";
 import { clientUploadFile } from "@/lib/flows";
-import { formatBytes, saveFile } from "@/lib/files";
+import { errorMessage } from "@/lib/api";
+import { formatBytes, openRemoteFile } from "@/lib/files";
 
 const card = "rounded-3xl border border-line bg-white p-5 shadow-sm sm:p-7";
 
 export function MilestonesPanel({ project, notify }: { project: Project; notify: Notify }) {
+  const [approving, setApproving] = useState<string | null>(null);
   const isDone = (m: { completedAt?: string }) => Boolean(m.completedAt);
   const doneCount = project.milestones.filter(isDone).length;
   const total = project.milestones.length;
   const nextId = project.milestones.find((m) => !isDone(m))?.id;
+
+  const approve = async (id: string, title: string) => {
+    setApproving(id);
+    try {
+      await approveMilestoneAsClient(project.code, id);
+      notify(`"${title}" approved. ${project.lead.name} has been notified.`);
+    } catch (e) {
+      notify(errorMessage(e), "info");
+    } finally {
+      setApproving(null);
+    }
+  };
 
   return (
     <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.35 }} className={card}>
@@ -65,13 +79,12 @@ export function MilestonesPanel({ project, notify }: { project: Project; notify:
               </div>
               {canApprove && (
                 <button
-                  onClick={() => {
-                    approveMilestoneAsClient(project, m.id);
-                    notify(`"${m.title}" approved. ${project.lead.name} has been notified.`);
-                  }}
-                  className="flex shrink-0 items-center justify-center gap-1.5 self-start rounded-full bg-navy px-4 py-2 text-sm font-bold text-white transition hover:bg-navy-700 sm:self-auto"
+                  onClick={() => void approve(m.id, m.title)}
+                  disabled={approving !== null}
+                  className="flex shrink-0 items-center justify-center gap-1.5 self-start rounded-full bg-navy px-4 py-2 text-sm font-bold text-white transition hover:bg-navy-700 disabled:opacity-50 sm:self-auto"
                 >
-                  <FileSignature className="size-4" /> Approve
+                  {approving === m.id ? <Loader2 className="size-4 animate-spin" /> : <FileSignature className="size-4" />}
+                  {approving === m.id ? "Approving…" : "Approve"}
                 </button>
               )}
             </li>
@@ -110,14 +123,15 @@ export function FilesPanel({ project, notify }: { project: Project; notify: Noti
   const upload = async () => {
     if (!pending) return;
     setUploading(true);
+    setError("");
     try {
-      const stored = await saveFile(pending);
-      clientUploadFile(project, { name: pending.name, kind: "doc", size: formatBytes(pending.size), blobId: stored.id, note: note.trim() || undefined });
-      notify(`${pending.name} shared with ${project.lead.name}.`);
+      const name = pending.name;
+      await clientUploadFile(project.code, pending, note.trim() || undefined);
+      notify(`${name} shared with ${project.lead.name}.`);
       setPending(null);
       setNote("");
-    } catch {
-      setError("Upload failed. Please try again.");
+    } catch (e) {
+      setError(errorMessage(e));
     } finally {
       setUploading(false);
     }
@@ -125,10 +139,11 @@ export function FilesPanel({ project, notify }: { project: Project; notify: Noti
 
   const download = async (file: SharedFile) => {
     setBusy(file.id);
+    setError("");
     try {
-      const { downloadSharedFile } = await import("@/lib/report");
-      await downloadSharedFile(project, file);
-      notify(`${file.name} downloaded.`);
+      const ok = await openRemoteFile(`/client/projects/${encodeURIComponent(project.code)}/files/${file.id}`, file.name, "download");
+      if (ok) notify(`${file.name} downloaded.`);
+      else setError(`We couldn't open ${file.name}. Please try again.`);
     } finally {
       setBusy(null);
     }
@@ -191,7 +206,9 @@ export function FilesPanel({ project, notify }: { project: Project; notify: Noti
             />
           </label>
         )}
-        {error && <p className="mt-2 text-xs font-bold text-danger">{error}</p>}
+        <div aria-live="polite" className="min-h-0">
+          {error && <p className="mt-2 text-xs font-bold text-danger">{error}</p>}
+        </div>
       </div>
       {project.files.length === 0 && <p className="mt-4 rounded-2xl border border-dashed border-line p-4 text-sm text-muted">No files shared yet.</p>}
       <ul className="mt-4 space-y-2">
@@ -231,7 +248,20 @@ export function RatingPanel({ project, notify }: { project: Project; notify: Not
   const [rating, setRating] = useState(0);
   const [hover, setHover] = useState(0);
   const [text, setText] = useState("");
+  const [saving, setSaving] = useState(false);
   const sent = Boolean(project.rating);
+
+  const submit = async () => {
+    setSaving(true);
+    try {
+      await rateProject(project.code, rating, text.trim() || undefined);
+      notify(`Thanks for rating ${project.title} ${rating}/5!`);
+    } catch (e) {
+      notify(errorMessage(e), "info");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.45 }} className={card}>
@@ -248,8 +278,8 @@ export function RatingPanel({ project, notify }: { project: Project; notify: Not
             exit={{ opacity: 0 }}
             onSubmit={(e) => {
               e.preventDefault();
-              rateProject(project, rating, text.trim() || undefined);
-              notify(`Thanks for rating ${project.title} ${rating}/5!`);
+              if (!rating || saving) return;
+              void submit();
             }}
           >
             <h4 className="font-display text-lg font-bold">How did we do?</h4>
@@ -277,10 +307,11 @@ export function RatingPanel({ project, notify }: { project: Project; notify: Not
               className="mt-3 w-full resize-none rounded-xl border border-line p-3 text-sm outline-none focus:border-brand focus:ring-4 focus:ring-brand/15"
             />
             <button
-              disabled={!rating}
-              className="mt-2 w-full rounded-xl bg-brand py-2.5 text-sm font-bold text-white transition hover:bg-brand-600 disabled:opacity-40"
+              disabled={!rating || saving}
+              className="mt-2 flex w-full items-center justify-center gap-2 rounded-xl bg-brand py-2.5 text-sm font-bold text-white transition hover:bg-brand-600 disabled:opacity-40"
             >
-              Submit rating
+              {saving && <Loader2 className="size-4 animate-spin" />}
+              {saving ? "Sending…" : "Submit rating"}
             </button>
           </motion.form>
         )}

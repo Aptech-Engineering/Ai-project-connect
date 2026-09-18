@@ -1,36 +1,63 @@
 "use client";
 
 /**
- * Commitment fee wallet: saved drafts, the ₦2,000 fee (Paystack or manual transfer),
- * admin confirmation, approval gating and refunds. Mirrors the PHP API in backend/.
+ * Commitment fee wallet, backed by the PHP API in backend/.
+ *
+ * Two audiences share this file:
+ *
+ * 1. The applicant (no sign-in). Everything hangs off a private **resume token**:
+ *    create a draft, save it as they type, pay the fee, submit. The token is the only
+ *    thing we keep in this browser (`rememberDraft` / `forgetDraft`); the application
+ *    itself always comes from the server. Because reading it now needs a request,
+ *    `rememberedDraft()` is gone: use `useRememberedDraft()` in a component, or
+ *    `loadRememberedDraft()` outside one.
+ *
+ * 2. Admins, who confirm transfers, record payments taken at a centre, send refunds
+ *    and start walk-in applications.
+ *
+ * Paying online is a real Paystack checkout: `startPaystack` returns an
+ * `authorizationUrl` and the caller sends the browser there with `goToPaystack`.
+ * Paystack sends the payer back to /apply with `?payment=…&reference=…`, which
+ * `paystackResult()` reads. Nothing in the browser can mark a payment as paid — the
+ * server verifies it with Paystack and its webhook.
+ *
+ * Every response that contains an application is the newest state, so mutations put it
+ * straight into the query cache; staff actions call `refreshIdeas()` instead.
  */
-import { readSiteContent } from "./content";
-import { readPaymentSettings } from "./settings";
+import { useEffect, useState } from "react";
+import { ApiError, api, formData, query } from "./api";
 import { formatPrice } from "./catalog";
-import type { StoredFileMeta } from "./files";
-import {
-  addIdea,
-  findIdeaById,
-  randomCode,
-  randomRef,
-  randomToken,
-  readIdeas,
-  updateIdea,
-  type Idea,
-  type IdeaInput,
-  type IdeaPayment,
-  type PaymentStatus,
-  type RefundAccount,
-  type RefundStatus,
+import { invalidate, primeQuery, useApi } from "./remote";
+import { readPaymentSettings } from "./settings";
+import { KEYS, refreshIdeas } from "./store";
+import type {
+  FeeState,
+  Idea,
+  IdeaPayment,
+  IdeaSource,
+  IdeaStatus,
+  PaymentMethod,
+  PaymentStatus,
+  RefundAccount,
+  RefundStatus,
+  WalletEntry,
 } from "./ideas";
-import { logActivity, notifyStaff, sendNotice, uid } from "./store";
-import type { Person } from "./types";
 
-const ADMIN_INBOX = "Admin team · admin@aptech.dev";
+export type { FeeState, RefundAccount, WalletEntry } from "./ideas";
+
+const APPLICATIONS = "/applications";
+const DRAFT = "/applications/draft";
 const DRAFT_KEY = "apc-idea-draft-token";
+
+const draftPath = (token: string) => DRAFT + query({ token });
 
 /* ================= fee settings ================= */
 
+/**
+ * The fee, the bank account and the wording shown to clients.
+ * This needs an admin session, so the public application page should read
+ * `application.checkout` instead — same numbers, no sign-in.
+ */
 export function feeSettings() {
   return readPaymentSettings();
 }
@@ -40,57 +67,171 @@ export function feeLabel() {
   return formatPrice(commitmentFee, currency);
 }
 
-const money = (p: Pick<IdeaPayment, "amount" | "currency">) => formatPrice(p.amount, p.currency);
+/** The same label from the public checkout block. */
+export function checkoutFeeLabel(checkout: Pick<Checkout, "fee" | "currency">) {
+  return formatPrice(checkout.fee, checkout.currency);
+}
 
 /* ================= payment state ================= */
-
-export type FeeState = "UNPAID" | Exclude<PaymentStatus, "FAILED">;
 
 export const FEE_STATES: Record<FeeState, { label: string; className: string }> = {
   UNPAID: { label: "Fee unpaid", className: "bg-line text-muted" },
   PENDING: { label: "Paying…", className: "bg-blue-soft text-navy" },
   AWAITING_CONFIRMATION: { label: "Confirm payment", className: "bg-brand-soft text-brand-700" },
   PAID: { label: "Fee paid", className: "bg-teal-soft text-teal-700" },
+  FAILED: { label: "Payment failed", className: "bg-danger-soft text-danger" },
 };
 
-export const REFUND_STATES: Record<RefundStatus, { label: string; className: string }> = {
+/** Refund badges. A payment with nothing to refund is `NONE`, which has no badge. */
+export const REFUND_STATES: Record<Exclude<RefundStatus, "NONE">, { label: string; className: string }> = {
   PENDING: { label: "Refund due", className: "bg-danger-soft text-danger" },
   PROCESSING: { label: "Refund processing", className: "bg-blue-soft text-navy" },
   REFUNDED: { label: "Refunded", className: "bg-mist text-muted" },
 };
 
-/** The latest attempt that hasn't failed. */
-export function currentPayment(idea: Idea): IdeaPayment | undefined {
-  const list = idea.payments ?? [];
-  for (let i = list.length - 1; i >= 0; i--) if (list[i].status !== "FAILED") return list[i];
-  return undefined;
+/**
+ * An idea from the inbox, or an application seen by the person who wrote it.
+ * Ideas carry `paymentStatus`, which is the fee state of the idea as a whole; an
+ * application only has the payment itself.
+ */
+type FeePayer = { payment: IdeaPayment; paymentStatus?: FeeState };
+
+export function feeState(source: FeePayer): FeeState {
+  return source.paymentStatus ?? source.payment.status;
 }
 
-export function lastFailedPayment(idea: Idea): IdeaPayment | undefined {
-  const last = idea.payments?.at(-1);
-  return last?.status === "FAILED" ? last : undefined;
+/**
+ * The attempt that counts, or undefined when nobody has tried to pay yet.
+ * Only the current attempt is sent; earlier ones are in the wallet ledger.
+ */
+export function currentPayment(source: FeePayer): IdeaPayment | undefined {
+  return source.payment.status === "UNPAID" ? undefined : source.payment;
 }
 
-export function feeState(idea: Idea): FeeState {
-  return (currentPayment(idea)?.status as FeeState | undefined) ?? "UNPAID";
+export function paidPayment(source: FeePayer): IdeaPayment | undefined {
+  return source.payment.status === "PAID" ? source.payment : undefined;
 }
 
-export function paidPayment(idea: Idea) {
-  return idea.payments?.find((p) => p.status === "PAID");
+/** The current attempt when it failed, so the page can offer to try again. */
+export function lastFailedPayment(source: FeePayer): IdeaPayment | undefined {
+  return source.payment.status === "FAILED" ? source.payment : undefined;
 }
 
 /** Why an admin can't approve this idea yet, or null when the fee is confirmed. */
-export function paymentBlocker(idea: Idea): string | null {
-  const state = feeState(idea);
+export function paymentBlocker(source: FeePayer): string | null {
+  const state = feeState(source);
   if (state === "PAID") return null;
   if (state === "AWAITING_CONFIRMATION") return `Confirm the client's ${feeLabel()} transfer before approving this idea.`;
+  if (state === "PENDING") return "The client's online payment hasn't completed yet, so this idea can't be approved.";
   return `The client hasn't paid the ${feeLabel()} commitment fee yet, so this idea can't be approved.`;
 }
 
-/* ================= drafts ================= */
+/* ================= the wallet ledger ================= */
 
-export function resumeLink(idea: Idea) {
-  return idea.draftToken ? `/?resume=${encodeURIComponent(idea.draftToken)}` : null;
+/**
+ * A wallet line ready to display. The server sends the lines (`wallet`); we only add
+ * what the list needs: a key, a one-line detail and whether money moved in or out.
+ */
+export interface LedgerEntry extends WalletEntry {
+  id: string;
+  detail: string;
+  /** +1 money in, -1 money back out, 0 informational. */
+  direction: 1 | -1 | 0;
+  tone: "good" | "wait" | "bad" | "muted";
+}
+
+const PAYMENT_TONES: Record<string, LedgerEntry["tone"]> = {
+  PAID: "good",
+  REFUNDED: "good",
+  FAILED: "bad",
+  UNPAID: "muted",
+  NONE: "muted",
+  PENDING: "wait",
+  PROCESSING: "wait",
+  AWAITING_CONFIRMATION: "wait",
+};
+
+function detailOf(e: WalletEntry) {
+  if (e.type === "fee") return `Reference ${e.reference ?? "—"}`;
+  const parts = [e.receiptNo ?? e.reference, e.note].filter(Boolean);
+  return parts.length ? parts.join(" · ") : "";
+}
+
+/** The client's transactions, in the order the server sends them (the fee first). */
+export function walletLedger(source: { wallet?: WalletEntry[] | null }): LedgerEntry[] {
+  return (source.wallet ?? []).map((e, i) => ({
+    ...e,
+    id: `${e.type}-${e.reference ?? i}`,
+    detail: detailOf(e),
+    direction: e.type === "payment" && e.status === "PAID" ? 1 : e.type === "refund" && e.status === "REFUNDED" ? -1 : 0,
+    tone: PAYMENT_TONES[e.status] ?? "muted",
+  }));
+}
+
+/** What the wallet holds: fees paid, less anything refunded. */
+export function walletBalance(source: { wallet?: WalletEntry[] | null }) {
+  return walletLedger(source).reduce((sum, e) => sum + e.direction * e.amount, 0);
+}
+
+/* ================= the application (public, resume token) ================= */
+
+/** The form itself. Everything but the email may still be empty while it's a draft. */
+export interface ApplicationFields {
+  name: string | null;
+  email: string;
+  phone: string | null;
+  organisation: string | null;
+  country: string | null;
+  state: string | null;
+  title: string | null;
+  category: string | null;
+  platforms: string[];
+  problem: string | null;
+  targetUsers: string | null;
+  features: string | null;
+  budget: string | null;
+  timeline: string | null;
+  nda: boolean;
+}
+
+/** What we send when saving: only the fields that changed. null clears one. */
+export type DraftFields = Partial<ApplicationFields>;
+
+/** Amounts, methods and bank details for the payment step, with no admin session. */
+export interface Checkout {
+  fee: number;
+  feeKobo: number;
+  currency: string;
+  feeTitle: string;
+  feeExplainer: string;
+  confirmationTime: string;
+  paystack: { enabled: boolean; publicKey: string | null; mode: "test" | "live" };
+  manual: { enabled: boolean; bankName: string; accountName: string; accountNumber: string; transferInstructions: string };
+}
+
+/** An application as the person who wrote it sees it. */
+export interface Application {
+  ref: string;
+  status: IdeaStatus;
+  source: IdeaSource;
+  fields: ApplicationFields;
+  attachment: { name: string; size: number } | null;
+  /** API field names still to fill in, e.g. ["problem", "budget"]. */
+  missingFields: string[];
+  complete: boolean;
+  /** Complete and the fee is paid (or a transfer is being checked). */
+  canSubmit: boolean;
+  createdAt: string | null;
+  lastSavedAt: string | null;
+  submittedAt: string | null;
+  payment: IdeaPayment;
+  wallet: WalletEntry[];
+  checkout: Checkout;
+}
+
+/** The link the server emails. Opening it resumes the application. */
+export function resumeLink(token: string) {
+  return `/apply?resume=${encodeURIComponent(token)}`;
 }
 
 export function rememberDraft(token: string) {
@@ -109,434 +250,371 @@ export function forgetDraft() {
   }
 }
 
-/** The unfinished application saved in this browser, if it's still a draft. */
-export function rememberedDraft(): Idea | undefined {
+/** The resume token saved in this browser, if any. */
+export function rememberedDraftToken(): string | null {
   try {
-    const token = localStorage.getItem(DRAFT_KEY);
-    const idea = token ? findDraft(token) : undefined;
-    if (idea?.status === "DRAFT") return idea;
-    if (token) localStorage.removeItem(DRAFT_KEY);
+    return localStorage.getItem(DRAFT_KEY);
   } catch {
-    /* private mode */
+    return null; // private mode
   }
-  return undefined;
 }
 
-export function findDraft(token: string): Idea | undefined {
-  return token ? readIdeas().find((i) => i.draftToken === token) : undefined;
+/** Puts a fresh application into the cache so every screen using this token sees it. */
+function keep(token: string, application: Application) {
+  primeQuery(draftPath(token), application);
+  return application;
 }
 
-export type DraftFields = Omit<IdeaInput, "location"> & { location?: string };
-
-function sendResumeEmail(idea: Idea, intro: string) {
-  sendNotice({
-    audience: "client",
-    channel: "email",
-    to: `${idea.name || "Applicant"} · ${idea.email}`,
-    subject: `Continue your application: ${idea.title || "your idea"} (${idea.ref})`,
-    body: `${intro}\n\nPick up where you stopped: ${resumeLink(idea)}\n\nKeep this link private. It opens your saved application and your project wallet.`,
-  });
+/** One application by its resume token. A null token means "nothing saved here". */
+export function useApplication(token: string | null) {
+  const { data, loading, error, refresh } = useApi<Application>(token ? draftPath(token) : null);
+  return { application: data, loading, error, refresh };
 }
 
-const withLocation = (f: DraftFields) => ({ ...f, location: f.state && f.country ? `${f.state}, ${f.country}` : (f.location ?? "") });
+export function loadApplication(token: string) {
+  return api.get<Application>(draftPath(token));
+}
 
-/** Creates a saved draft as soon as we know the client's email, and emails them a link to continue. */
-export function createDraft(fields: DraftFields, step: number, startedBy?: Person): Idea {
-  const now = new Date().toISOString();
-  const idea: Idea = {
-    ...withLocation(fields),
-    id: uid(),
-    ref: randomRef(),
-    submittedAt: now,
-    lastSavedAt: now,
-    status: "DRAFT",
-    draftToken: randomToken(),
-    draftStep: step,
-    startedBy: startedBy?.name,
-    payments: [],
-  };
-  addIdea(idea);
-  sendResumeEmail(
-    idea,
-    startedBy
-      ? `Hi ${idea.name},\n\n${startedBy.name} started your AI Project Connect application at our centre. Add the remaining details and pay the ${feeLabel()} commitment fee to send it to our engineers.`
-      : `Hi ${idea.name},\n\nWe saved your application. You can close the page and come back anytime.`,
+/**
+ * The unfinished application saved in this browser. `application` is only set while
+ * it is still a draft; once it's submitted the token is dropped.
+ */
+export function useRememberedDraft() {
+  const [token, setToken] = useState<string | null>(null);
+  useEffect(() => setToken(rememberedDraftToken()), []);
+  const { application, loading, error, refresh } = useApplication(token);
+  const draft = application?.status === "DRAFT" ? application : undefined;
+  useEffect(() => {
+    if (application && application.status !== "DRAFT") forgetDraft();
+  }, [application]);
+  // A token that no longer opens anything (deleted, or a different server) is dead weight.
+  useEffect(() => {
+    if (token && !loading && !application && error) {
+      forgetDraft();
+      setToken(null);
+    }
+  }, [token, loading, application, error]);
+  return { token, application: draft, loading, error, refresh };
+}
+
+/** The same thing outside a component. Returns null when there's nothing usable. */
+export async function loadRememberedDraft() {
+  const token = rememberedDraftToken();
+  if (!token) return null;
+  let application: Application;
+  try {
+    application = await loadApplication(token);
+  } catch (e) {
+    // A link that no longer works is an answer, not a failure.
+    if (e instanceof ApiError && e.status === 404) {
+      forgetDraft();
+      return null;
+    }
+    throw e;
+  }
+  if (application.status !== "DRAFT") {
+    forgetDraft();
+    return null;
+  }
+  return { token, application };
+}
+
+/**
+ * Starts a saved application as soon as we know the email, and emails the person a
+ * link to continue. The token is remembered here, so the caller doesn't have to.
+ * `devLink` only comes back outside production.
+ */
+export async function createDraft(fields: DraftFields, attachment?: File) {
+  const result = await api.post<{ token: string; application: Application; devLink?: string }>(
+    APPLICATIONS,
+    attachment ? formData({ ...fields, attachment }) : fields,
   );
-  if (startedBy) logActivity(startedBy, `Started a walk-in application for ${idea.name} (${idea.ref})`);
-  return idea;
+  rememberDraft(result.token);
+  keep(result.token, result.application);
+  return result;
 }
 
-export function saveDraft(token: string, fields: DraftFields, step: number): Idea | undefined {
-  const idea = findDraft(token);
-  if (!idea || idea.status !== "DRAFT") return idea;
-  updateIdea(idea.id, { ...withLocation(fields), draftStep: step, lastSavedAt: new Date().toISOString() });
-  return findIdeaById(idea.id);
+/** Saves what they've typed so far. Returns the application as the server now holds it. */
+export async function saveDraft(token: string, fields: DraftFields, file?: { attachment?: File; removeAttachment?: boolean }) {
+  const body =
+    file?.attachment || file?.removeAttachment
+      ? formData({ ...fields, token, attachment: file.attachment, removeAttachment: file.removeAttachment ? "1" : undefined })
+      : { ...fields, token };
+  return keep(token, await api.post<Application>(DRAFT, body));
 }
 
-/** Emails a continue link for every open draft under this email. Callers must show the same message either way. */
-export function emailResumeLinks(email: string): Idea[] {
-  const drafts = readIdeas().filter((i) => i.status === "DRAFT" && i.email.trim().toLowerCase() === email.trim().toLowerCase());
-  drafts.forEach((d) => sendResumeEmail(d, `Hi ${d.name || "there"},\n\nHere's the link to finish your application.`));
-  return drafts;
+/**
+ * "I've lost my link": emails one for every open draft under this email.
+ * The message is the same whether or not we know the address, so callers can show it as is.
+ */
+export function emailResumeLinks(email: string) {
+  return api.post<{ message: string; devLinks?: string[] }>(`${APPLICATIONS}/resume-links`, { email: email.trim() });
 }
 
-/** Sections still missing before a draft can be submitted. */
-export function draftMissing(idea: Pick<Idea, "name" | "email" | "phone" | "country" | "state" | "title" | "category" | "platforms" | "problem" | "targetUsers" | "features" | "budget" | "timeline">) {
-  const missing: string[] = [];
-  if (idea.name.trim().length < 2 || !/^\S+@\S+\.\S+$/.test(idea.email) || idea.phone.replace(/\D/g, "").length < 10 || !idea.country || !idea.state) missing.push("About you");
-  if (idea.title.trim().length < 2 || !idea.category || idea.platforms.length === 0 || idea.problem.trim().length < 15 || idea.targetUsers.trim().length < 5 || idea.features.trim().length < 10) missing.push("Your idea");
-  if (!idea.budget || !idea.timeline) missing.push("Budget & timeline");
-  return missing;
+/**
+ * Emails one draft a brand-new link (admin only). Prefer this over
+ * `emailResumeLinks`, which emails a link for every open draft under that address.
+ */
+export async function resendResumeLink(ideaId: number) {
+  const result = await api.post<{ sentTo: string; idea: unknown; devLink?: string }>(`/staff/ideas/${ideaId}/resume-link`, {});
+  await refreshIdeas();
+  return result;
+}
+
+/** Which sections of the form are still missing, from the server's field list. */
+const FIELD_SECTIONS: Record<string, string> = {
+  name: "About you",
+  email: "About you",
+  phone: "About you",
+  country: "About you",
+  state: "About you",
+  title: "Your idea",
+  category: "Your idea",
+  platforms: "Your idea",
+  problem: "Your idea",
+  targetUsers: "Your idea",
+  features: "Your idea",
+  budget: "Budget & timeline",
+  timeline: "Budget & timeline",
+};
+
+export function draftMissing(application: Pick<Application, "missingFields">) {
+  const sections: string[] = [];
+  for (const field of application.missingFields) {
+    const section = FIELD_SECTIONS[field];
+    if (section && !sections.includes(section)) sections.push(section);
+  }
+  return sections;
 }
 
 /* ================= paying ================= */
 
-const receiptNo = (idea: Idea) => {
-  const d = new Date();
-  return `RCPT-${String(d.getFullYear()).slice(-2)}${String(d.getMonth() + 1).padStart(2, "0")}-${idea.ref.slice(5)}`;
-};
-
-function patchPayment(idea: Idea, paymentId: string, patch: Partial<IdeaPayment>) {
-  updateIdea(idea.id, { payments: (idea.payments ?? []).map((p) => (p.id === paymentId ? { ...p, ...patch } : p)) });
+export interface PaystackCheckout {
+  reference: string;
+  /** Send the browser here; Paystack's own page takes the payment. */
+  authorizationUrl: string;
+  accessCode: string;
+  publicKey: string | null;
+  email: string;
+  amount: number;
+  amountKobo: number;
+  currency: string;
 }
 
-function sendReceipt(idea: Idea, payment: IdeaPayment) {
-  sendNotice({
-    audience: "client",
-    channel: "email+sms",
-    to: `${idea.name} · ${idea.email}`,
-    subject: `Receipt ${payment.receiptNo}: commitment fee paid`,
-    body: `Hi ${idea.name},\n\nWe received your ${money(payment)} commitment fee for ${idea.title || idea.ref}.\n\nReceipt: ${payment.receiptNo}\nReference: ${payment.reference}\nMethod: ${payment.atCentre ? "Paid at an Aptech centre" : payment.method === "paystack" ? "Paystack" : "Bank transfer"}\nDate: ${new Date(payment.paidAt!).toDateString()}\n\nIf we can't take your idea on, we'll refund this in full.`,
-  });
+/** Opens a Paystack checkout for the fee. The payment is only PENDING until Paystack confirms it. */
+export async function startPaystack(token: string) {
+  const checkout = await api.post<PaystackCheckout>(`${APPLICATIONS}/pay/paystack`, { token });
+  await invalidate(draftPath(token));
+  return checkout;
 }
 
-/** Opens a Paystack checkout. On the real server this calls /transaction/initialize. */
-export function startPaystack(token: string): { ok: true; reference: string; amount: number; currency: string; email: string } | { ok: false; error: string } {
-  const idea = findDraft(token);
-  if (!idea || idea.status !== "DRAFT") return { ok: false, error: "This application can no longer be paid." };
-  const state = feeState(idea);
-  if (state === "PAID" || state === "AWAITING_CONFIRMATION") return { ok: false, error: "Your commitment fee is already recorded." };
-  const { commitmentFee, currency, paystackEnabled } = feeSettings();
-  if (!paystackEnabled) return { ok: false, error: "Card payments are turned off. Please use bank transfer." };
-  const payment: IdeaPayment = { id: uid(), method: "paystack", status: "PENDING", amount: commitmentFee, currency, reference: `PSK-${randomCode(8)}`, createdAt: new Date().toISOString() };
-  // Replace an abandoned Paystack attempt instead of stacking them up.
-  const kept = (idea.payments ?? []).filter((p) => p.status !== "PENDING");
-  updateIdea(idea.id, { payments: [...kept, payment] });
-  return { ok: true, reference: payment.reference, amount: payment.amount, currency: payment.currency, email: idea.email };
+/** Leaves the site for Paystack's page. There is no in-app checkout. */
+export function goToPaystack(checkout: Pick<PaystackCheckout, "authorizationUrl">) {
+  window.location.assign(checkout.authorizationUrl);
 }
+
+export type PaymentOutcome = "success" | "pending" | "failed";
 
 /**
- * Paystack's result. In production only the signed webhook / server-side verify call
- * reaches this point; the browser redirect never marks a payment as paid.
+ * What Paystack's callback put in the URL when it sent the payer back to /apply.
+ * Null when they didn't come from a payment. The server has already verified it.
  */
-export function completePaystack(reference: string, success: boolean): Idea | undefined {
-  const idea = readIdeas().find((i) => i.payments?.some((p) => p.reference === reference));
-  const payment = idea?.payments?.find((p) => p.reference === reference);
-  if (!idea || !payment || payment.status !== "PENDING") return idea;
-  if (!success) {
-    patchPayment(idea, payment.id, { status: "FAILED", failureReason: "Payment was cancelled or declined." });
-    return findIdeaById(idea.id);
-  }
-  const paid: IdeaPayment = { ...payment, status: "PAID", paidAt: new Date().toISOString(), receiptNo: receiptNo(idea) };
-  patchPayment(idea, payment.id, paid);
-  sendReceipt(idea, paid);
-  logActivity("Paystack", `Commitment fee paid online for ${idea.ref} (${money(paid)}, ${paid.reference})`);
-  return findIdeaById(idea.id);
+export function paystackResult(search?: string): { outcome: PaymentOutcome; reference: string | null; ref: string | null } | null {
+  if (search === undefined && typeof window === "undefined") return null;
+  const params = new URLSearchParams(search ?? window.location.search);
+  const outcome = params.get("payment");
+  if (outcome !== "success" && outcome !== "pending" && outcome !== "failed") return null;
+  return { outcome, reference: params.get("reference"), ref: params.get("ref") };
+}
+
+/** Takes the payment answer out of the address bar so a refresh doesn't repeat it. */
+export function clearPaystackResult() {
+  if (typeof window === "undefined") return;
+  const url = new URL(window.location.href);
+  ["payment", "reference", "ref"].forEach((k) => url.searchParams.delete(k));
+  window.history.replaceState(null, "", url.pathname + url.search + url.hash);
 }
 
 export interface ManualClaim {
   senderName: string;
   senderBank: string;
+  /** What they actually sent; the server refuses less than the fee. */
+  amount: number;
+  /** YYYY-MM-DD */
   transferDate: string;
-  proof?: StoredFileMeta;
-  refundAccount: RefundAccount;
+  /** Where to refund if we can't take the idea on. */
+  refundAccountName?: string;
+  refundAccountNumber?: string;
+  refundBank?: string;
+  proof?: File;
 }
 
-/** "I have sent the money": waits for an admin to confirm the transfer. */
-export function claimManualPayment(token: string, claim: ManualClaim): { ok: true } | { ok: false; error: string } {
-  const idea = findDraft(token);
-  if (!idea || idea.status !== "DRAFT") return { ok: false, error: "This application can no longer be paid." };
-  const state = feeState(idea);
-  if (state === "PAID" || state === "AWAITING_CONFIRMATION") return { ok: false, error: "Your commitment fee is already recorded." };
-  const { commitmentFee, currency } = feeSettings();
-  const payment: IdeaPayment = {
-    id: uid(),
-    method: "manual",
-    status: "AWAITING_CONFIRMATION",
-    amount: commitmentFee,
-    currency,
-    reference: `TRF-${idea.ref.slice(5)}${(idea.payments?.length ?? 0) ? `-${(idea.payments?.length ?? 0) + 1}` : ""}`,
-    createdAt: new Date().toISOString(),
-    senderName: claim.senderName,
-    senderBank: claim.senderBank,
-    transferDate: claim.transferDate,
-    proof: claim.proof,
-  };
-  updateIdea(idea.id, { payments: [...(idea.payments ?? []).filter((p) => p.status !== "PENDING"), payment], refundAccount: claim.refundAccount });
-  sendNotice({
-    audience: "client",
-    channel: "email",
-    to: `${idea.name} · ${idea.email}`,
-    subject: `We're checking your transfer (${idea.ref})`,
-    body: `Hi ${idea.name},\n\nThanks! We'll confirm your ${money(payment)} transfer from ${claim.senderName} (${claim.senderBank}) within ${feeSettings().confirmationTime} and email your receipt.`,
-  });
-  notifyStaff(ADMIN_INBOX, `Confirm a transfer: ${money(payment)} for ${idea.ref}`, `${claim.senderName} says they sent ${money(payment)} from ${claim.senderBank} on ${claim.transferDate}${claim.proof ? " and attached proof" : ""}. Check the account and confirm it under Payments.`);
-  logActivity(`${idea.name} (Client)`, `Reported a bank transfer for ${idea.ref} (${money(payment)})`);
-  return { ok: true };
+/** "I have sent the money": the fee waits for an admin to confirm the transfer. */
+export async function claimManualPayment(token: string, claim: ManualClaim) {
+  return keep(token, await api.post<Application>(`${APPLICATIONS}/pay/manual`, formData({ ...claim, token })));
 }
 
-export function updateRefundAccount(token: string, account: RefundAccount) {
-  const idea = findDraft(token);
-  if (idea) updateIdea(idea.id, { refundAccount: account });
-}
-
-/** Sends the draft to the team. Needs a complete form and a paid (or reported) fee. */
-export function submitDraft(token: string): { ok: true; idea: Idea } | { ok: false; error: string } {
-  const idea = findDraft(token);
-  if (!idea) return { ok: false, error: "We couldn't find this application." };
-  if (idea.status !== "DRAFT") return { ok: false, error: "This application was already submitted." };
-  const missing = draftMissing(idea);
-  if (missing.length) return { ok: false, error: `Finish these sections first: ${missing.join(", ")}.` };
-  const state = feeState(idea);
-  if (state !== "PAID" && state !== "AWAITING_CONFIRMATION") return { ok: false, error: `Fund your project wallet with the ${feeLabel()} commitment fee to submit.` };
-
-  const now = new Date().toISOString();
-  updateIdea(idea.id, { status: "NEW", submittedAt: now, lastSavedAt: now });
-  const { responseTime } = readSiteContent().ideaForm;
-  sendNotice({
-    audience: "client",
-    channel: "email",
-    to: `${idea.name} · ${idea.email}`,
-    subject: `We received your idea (${idea.ref})`,
-    body: `Thanks for sharing ${idea.title}. We'll send a proposal within ${responseTime}${state === "AWAITING_CONFIRMATION" ? " once we confirm your transfer" : ""}. Check progress anytime with reference ${idea.ref}.`,
-  });
-  notifyStaff(ADMIN_INBOX, `New idea submitted: ${idea.title}`, `${idea.name} (${idea.location}) · ${idea.category} · ${idea.budget} · fee ${state === "PAID" ? "paid" : "awaiting confirmation"}${idea.attachment ? ` · PDF brief attached (${idea.attachment.name})` : ""}`);
-  logActivity(`${idea.name} (Client)`, `Submitted idea ${idea.ref}`);
-  forgetDraft();
-  return { ok: true, idea: findIdeaById(idea.id)! };
-}
-
-/* ================= staff actions ================= */
-
-export function confirmPayment(ideaId: string, actor: Person) {
-  const idea = findIdeaById(ideaId);
-  const payment = idea && currentPayment(idea);
-  if (!idea || payment?.status !== "AWAITING_CONFIRMATION") return;
-  const now = new Date().toISOString();
-  const paid: IdeaPayment = { ...payment, status: "PAID", paidAt: now, confirmedAt: now, confirmedBy: actor.name, receiptNo: receiptNo(idea) };
-  patchPayment(idea, payment.id, paid);
-  sendReceipt(idea, paid);
-  logActivity(actor, `Confirmed the ${money(paid)} transfer for ${idea.ref} (${paid.reference})`);
-}
-
-export function rejectPayment(ideaId: string, reason: string, actor: Person) {
-  const idea = findIdeaById(ideaId);
-  const payment = idea && currentPayment(idea);
-  if (!idea || payment?.status !== "AWAITING_CONFIRMATION") return;
-  patchPayment(idea, payment.id, { status: "FAILED", failureReason: reason, confirmedBy: actor.name, confirmedAt: new Date().toISOString() });
-  sendNotice({
-    audience: "client",
-    channel: "email+sms",
-    to: `${idea.name} · ${idea.email}`,
-    subject: `We couldn't find your transfer (${idea.ref})`,
-    body: `Hi ${idea.name},\n\nWe checked our account but couldn't match your ${money(payment)} transfer: ${reason}\n\nOpen your application to pay again or send the correct details: ${resumeLink(idea)}`,
-  });
-  logActivity(actor, `Marked the transfer for ${idea.ref} as not received: ${reason}`);
-}
-
-/** Cash or transfer received at an Aptech centre, confirmed in one step. */
-export function recordCentrePayment(ideaId: string, note: string, actor: Person) {
-  const idea = findIdeaById(ideaId);
-  if (!idea || feeState(idea) === "PAID") return;
-  const { commitmentFee, currency } = feeSettings();
-  const now = new Date().toISOString();
-  const payment: IdeaPayment = {
-    id: uid(),
-    method: "manual",
-    status: "PAID",
-    amount: commitmentFee,
-    currency,
-    reference: `CTR-${randomCode(6)}`,
-    createdAt: now,
-    paidAt: now,
-    atCentre: true,
-    note: note || "Paid at centre",
-    confirmedAt: now,
-    confirmedBy: actor.name,
-    receiptNo: receiptNo(idea),
-  };
-  updateIdea(idea.id, { payments: [...(idea.payments ?? []).filter((p) => p.status === "FAILED" || p.status === "PAID"), payment] });
-  sendReceipt(idea, payment);
-  logActivity(actor, `Recorded a ${money(payment)} commitment fee paid at the centre for ${idea.ref}`);
-}
-
-/** Declines the idea. A paid fee is queued for a full refund. */
-export function declineIdea(ideaId: string, actor: Person, reason = "Idea declined by the team"): { ok: true; refundQueued: boolean } | { ok: false; error: string } {
-  const idea = findIdeaById(ideaId);
-  if (!idea) return { ok: false, error: "Idea not found." };
-  if (feeState(idea) === "AWAITING_CONFIRMATION") return { ok: false, error: "Confirm or reject the client's transfer first, so we know whether to refund it." };
-  const paid = paidPayment(idea);
-  const refundQueued = Boolean(paid && !paid.refund);
-  updateIdea(idea.id, {
-    status: "DECLINED",
-    payments: (idea.payments ?? []).map((p) => (p === paid && refundQueued ? { ...p, refund: { status: "PENDING" as const, queuedAt: new Date().toISOString(), reason } } : p)),
-  });
-  sendNotice({
-    audience: "client",
-    channel: "email",
-    to: `${idea.name} · ${idea.email}`,
-    subject: `An update on ${idea.title}`,
-    body: `Hi ${idea.name},\n\nThank you for sharing ${idea.title} with us. After review, we're not able to take it on right now.${refundQueued ? `\n\nWe're refunding your ${money(paid!)} commitment fee in full. ${paid!.method === "paystack" ? "It goes back to the card or account you paid with." : "It goes to the refund account you gave us."}` : ""}`,
-  });
-  logActivity(actor, `Declined idea ${idea.ref}${refundQueued ? " and queued a commitment fee refund" : ""}`);
-  return { ok: true, refundQueued };
+/** Changes where a bank transfer would be refunded to, until the refund is sent. */
+export async function updateRefundAccount(token: string, account: RefundAccount) {
+  return keep(token, await api.post<Application>(`${APPLICATIONS}/refund-account`, { ...account, token }));
 }
 
 /**
- * Paystack payments are refunded through Paystack's refund API (PROCESSING until
- * Paystack's refund.processed webhook). Manual payments are refunded by bank transfer.
+ * Sends the application to the team. The server checks it's complete and the fee is
+ * paid (or a transfer is being checked), so the saved token is no longer needed.
  */
-export function startRefund(ideaId: string, actor: Person, manual?: { reference: string; note?: string }) {
-  const idea = findIdeaById(ideaId);
-  const paid = idea && paidPayment(idea);
-  if (!idea || !paid?.refund || paid.refund.status === "REFUNDED") return;
-  const now = new Date().toISOString();
-  if (paid.method === "paystack" && !manual) {
-    patchPayment(idea, paid.id, { refund: { ...paid.refund, status: "PROCESSING", reference: `RFD-${randomCode(8)}`, by: actor.name } });
-    logActivity(actor, `Started a Paystack refund of ${money(paid)} for ${idea.ref}`);
-    return;
-  }
-  patchPayment(idea, paid.id, { refund: { ...paid.refund, status: "REFUNDED", reference: manual?.reference, note: manual?.note, by: actor.name, completedAt: now } });
-  notifyRefunded(idea, paid);
-  logActivity(actor, `Refunded ${money(paid)} to ${idea.name} for ${idea.ref}${manual?.reference ? ` (${manual.reference})` : ""}`);
+export async function submitDraft(token: string) {
+  const result = await api.post<{ ref: string; title: string | null; status: IdeaStatus; submittedAt: string | null; application: Application }>(
+    `${APPLICATIONS}/submit`,
+    { token },
+  );
+  keep(token, result.application);
+  forgetDraft();
+  return result;
 }
 
-/** Paystack confirmed the refund (refund.processed webhook on the real server). */
-export function markRefundProcessed(ideaId: string, actor: Person | string = "Paystack") {
-  const idea = findIdeaById(ideaId);
-  const paid = idea && paidPayment(idea);
-  if (!idea || paid?.refund?.status !== "PROCESSING") return;
-  patchPayment(idea, paid.id, { refund: { ...paid.refund, status: "REFUNDED", completedAt: new Date().toISOString() } });
-  notifyRefunded(idea, paid);
-  logActivity(actor, `Refund of ${money(paid)} completed for ${idea.ref}`);
+/* ================= staff: payments & refunds ================= */
+
+/** A payment in the admin queue, with the idea it belongs to. */
+export interface StaffPayment extends IdeaPayment {
+  id: number;
+  idea: {
+    id: number;
+    ref: string;
+    title: string | null;
+    name: string | null;
+    email: string;
+    phone: string | null;
+    status: IdeaStatus;
+    source: IdeaSource;
+  };
 }
 
-function notifyRefunded(idea: Idea, paid: IdeaPayment) {
-  sendNotice({
-    audience: "client",
-    channel: "email+sms",
-    to: `${idea.name} · ${idea.email}`,
-    subject: `Your ${money(paid)} refund is on its way`,
-    body: `Hi ${idea.name},\n\nWe've refunded your commitment fee for ${idea.title} (receipt ${paid.receiptNo}). ${paid.method === "paystack" ? "Banks usually show it within 5 working days." : idea.refundAccount ? `It was sent to ${idea.refundAccount.name}, ${idea.refundAccount.bank} ${idea.refundAccount.number}.` : ""}`,
-  });
+export interface PaymentCounts {
+  awaitingConfirmation: number;
+  refundsPending: number;
+  refundsProcessing: number;
+  paid: number;
+  /** Fees paid, less anything already refunded. */
+  collected: number;
 }
 
-export interface WalkInApplication {
+export type PaymentFilters = {
+  status?: PaymentStatus;
+  method?: PaymentMethod;
+  /** "open" means queued or processing. */
+  refund?: "open" | RefundStatus;
+  q?: string;
+};
+
+/** The payments queue (admin only). Pass `enabled: false` for staff who can't see it. */
+export function useStaffPayments(filters: PaymentFilters = {}, enabled = true) {
+  const { data, loading, error, refresh } = useApi<{ items: StaffPayment[]; counts: PaymentCounts }>(enabled ? KEYS.payments + query(filters) : null);
+  return { payments: data?.items ?? [], counts: data?.counts, loading, error, refresh };
+}
+
+const paymentPath = (id: number) => `${KEYS.payments}/${id}`;
+
+/** The money arrived: marks the transfer paid and emails the receipt. */
+export async function confirmPayment(paymentId: number, note?: string) {
+  const payment = await api.post<StaffPayment>(`${paymentPath(paymentId)}/confirm`, { note });
+  await refreshIdeas();
+  return payment;
+}
+
+/** We couldn't find the transfer. The client is emailed a link to try again. */
+export async function rejectPayment(paymentId: number, reason: string) {
+  const payment = await api.post<StaffPayment>(`${paymentPath(paymentId)}/reject`, { reason });
+  await refreshIdeas();
+  return payment;
+}
+
+/**
+ * Sends a queued refund. Paystack refunds go through Paystack (PROCESSING until its
+ * webhook says otherwise); a bank transfer needs the reference of the transfer you sent.
+ */
+export async function refundPayment(paymentId: number, input: { reference?: string; note?: string } = {}) {
+  const payment = await api.post<StaffPayment>(`${paymentPath(paymentId)}/refund`, input);
+  await refreshIdeas();
+  return payment;
+}
+
+/** Marks a refund as done, e.g. when Paystack's webhook never arrived. */
+export async function completeRefund(paymentId: number, input: { reference?: string; note?: string } = {}) {
+  const payment = await api.post<StaffPayment>(`${paymentPath(paymentId)}/refund/complete`, input);
+  await refreshIdeas();
+  return payment;
+}
+
+export interface CentrePayment {
+  /** Defaults to the fee. */
+  amount?: number;
+  senderName?: string;
+  note?: string;
+  refundAccountName?: string;
+  refundAccountNumber?: string;
+  refundBank?: string;
+}
+
+/** Cash or a transfer taken at an Aptech centre: recorded and confirmed in one step. */
+export async function recordCentrePayment(ideaId: number, input: CentrePayment = {}) {
+  const payment = await api.post<StaffPayment>(`${KEYS.ideas}/${ideaId}/payments/centre`, input);
+  await refreshIdeas();
+  return payment;
+}
+
+export interface WalkInFields {
   name: string;
   email: string;
-  phone: string;
+  phone?: string;
   organisation?: string;
-  country: string;
-  state: string;
-  title: string;
-  category: string;
-  platforms: string[];
-  budget: string;
-  brief?: StoredFileMeta;
-  paidAtCentre?: { note: string };
+  country?: string;
+  state?: string;
+  title?: string;
+  category?: string;
+  platforms?: string[];
+  problem?: string;
+  targetUsers?: string;
+  features?: string;
+  budget?: string;
+  timeline?: string;
+  nda?: boolean;
+  /** The brief they brought with them. */
+  attachment?: File;
 }
 
-/** Walk-in clients follow the same flow: the admin starts it, the client finishes and pays from the emailed link. */
-export function startWalkInApplication(input: WalkInApplication, actor: Person): Idea {
-  const idea = createDraft(
-    {
-      name: input.name,
-      email: input.email,
-      phone: input.phone,
-      organisation: input.organisation,
-      country: input.country,
-      state: input.state,
-      title: input.title,
-      category: input.category,
-      platforms: input.platforms,
-      problem: "",
-      targetUsers: "",
-      features: "",
-      budget: input.budget,
-      timeline: "",
-      nda: true,
-      attachment: input.brief,
-    },
-    1,
-    actor,
+/**
+ * Walk-in clients follow the same flow as everyone else: an admin starts the
+ * application, then the client finishes and pays from the link we email and text them.
+ * `sentTo` is their masked email; `devLink` only comes back outside production.
+ */
+export async function startWalkInApplication(fields: WalkInFields) {
+  const { attachment, ...rest } = fields;
+  const result = await api.post<{ idea: Idea; sentTo: string; devLink?: string }>(
+    "/staff/walk-ins",
+    attachment ? formData({ ...rest, attachment }) : rest,
   );
-  if (input.paidAtCentre) recordCentrePayment(idea.id, input.paidAtCentre.note, actor);
-  return findIdeaById(idea.id)!;
+  await refreshIdeas();
+  return result;
 }
 
-/* ================= wallet & reports ================= */
+/* ================= reports ================= */
 
-export interface LedgerEntry {
-  id: string;
-  label: string;
-  detail: string;
-  amount: number;
-  currency: string;
-  /** +1 money in, -1 money back out, 0 informational. */
-  direction: 1 | -1 | 0;
-  status: string;
-  tone: "good" | "wait" | "bad" | "muted";
-  at: string;
-}
-
-export function walletLedger(idea: Idea): LedgerEntry[] {
-  const entries: LedgerEntry[] = [];
-  for (const p of idea.payments ?? []) {
-    const how = p.atCentre ? "Paid at an Aptech centre" : p.method === "paystack" ? "Card / bank via Paystack" : `Bank transfer from ${p.senderName ?? "you"}`;
-    entries.push({
-      id: p.id,
-      label: "Commitment fee",
-      detail: `${how} · ${p.receiptNo ?? p.reference}`,
-      amount: p.amount,
-      currency: p.currency,
-      direction: p.status === "PAID" ? 1 : 0,
-      status: { PENDING: "Not completed", AWAITING_CONFIRMATION: "Checking transfer", PAID: "Paid", FAILED: p.failureReason ? `Failed: ${p.failureReason}` : "Failed" }[p.status],
-      tone: p.status === "PAID" ? "good" : p.status === "FAILED" ? "bad" : p.status === "PENDING" ? "muted" : "wait",
-      at: p.paidAt ?? p.createdAt,
-    });
-    if (p.refund) {
-      entries.push({
-        id: `${p.id}-refund`,
-        label: "Refund",
-        detail: p.refund.reason + (p.refund.reference ? ` · ${p.refund.reference}` : ""),
-        amount: p.amount,
-        currency: p.currency,
-        direction: p.refund.status === "REFUNDED" ? -1 : 0,
-        status: { PENDING: "Queued", PROCESSING: "Processing", REFUNDED: "Refunded" }[p.refund.status],
-        tone: p.refund.status === "REFUNDED" ? "good" : "wait",
-        at: p.refund.completedAt ?? p.refund.queuedAt,
-      });
-    }
-  }
-  return entries.sort((a, b) => b.at.localeCompare(a.at));
-}
-
-export function walletBalance(idea: Idea) {
-  return walletLedger(idea).reduce((sum, e) => sum + e.direction * e.amount, 0);
-}
-
-export function feeSummary(ideas: Idea[]) {
-  let collected = 0;
-  let refunded = 0;
-  let awaiting = 0;
-  let refundsDue = 0;
-  for (const idea of ideas) {
-    for (const p of idea.payments ?? []) {
-      if (p.status === "PAID") collected += p.amount;
-      if (p.status === "AWAITING_CONFIRMATION") awaiting++;
-      if (p.refund?.status === "REFUNDED") refunded += p.amount;
-      else if (p.refund) refundsDue++;
-    }
-  }
-  return { collected, refunded, net: collected - refunded, awaiting, refundsDue };
+/**
+ * Fee totals for the dashboard. `counts` comes straight from the payments endpoint;
+ * `refunded` is added up from the payments passed in, because the API doesn't total it —
+ * so it only covers the payments on screen.
+ */
+export function feeSummary(counts?: PaymentCounts, payments: StaffPayment[] = []) {
+  const net = counts?.collected ?? 0;
+  const refunded = payments.filter((p) => p.refund.status === "REFUNDED").reduce((sum, p) => sum + p.amount, 0);
+  return {
+    collected: net + refunded,
+    refunded,
+    net,
+    awaiting: counts?.awaitingConfirmation ?? 0,
+    refundsDue: counts?.refundsPending ?? 0,
+    refundsProcessing: counts?.refundsProcessing ?? 0,
+    paid: counts?.paid ?? 0,
+  };
 }

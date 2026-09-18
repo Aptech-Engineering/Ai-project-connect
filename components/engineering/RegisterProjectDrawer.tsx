@@ -1,26 +1,30 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Banknote, Check, CheckCircle2, Copy, CreditCard, FileText, Link2, Loader2, Search, UploadCloud, X } from "lucide-react";
-import { existingClients } from "@/lib/flows";
+import { Banknote, Check, CheckCircle2, Copy, CreditCard, FileText, Loader2, Mail, Search, UploadCloud, X } from "lucide-react";
+import { errorMessage } from "@/lib/api";
 import { useSiteContent } from "@/lib/content";
+import { formatPrice } from "@/lib/catalog";
+import { usePaymentSettings } from "@/lib/settings";
+import { useStaffClients } from "@/lib/store";
 import { COUNTRIES, OTHER_COUNTRY, findCountry } from "@/lib/locations";
-import { formatBytes, saveFile, validatePdf, type StoredFileMeta } from "@/lib/files";
-import { useStaff } from "@/lib/staff";
+import { formatBytes, validatePdf } from "@/lib/files";
 import { cn } from "@/lib/format";
 import type { Idea } from "@/lib/ideas";
-import { feeLabel, feeState, resumeLink, startWalkInApplication } from "@/lib/wallet";
+import { recordCentrePayment, startWalkInApplication } from "@/lib/wallet";
 import type { Notify } from "../PortalApp";
-import { actingAs } from "./helpers";
 
 const inputClass = "h-11 w-full rounded-xl border border-line bg-white px-3.5 text-sm outline-none transition focus:border-brand focus:ring-4 focus:ring-brand/15";
 
 /**
  * Walk-in clients onboard through the platform like everyone else: the admin starts
- * the application, the client gets an emailed link to finish it and fund their wallet.
+ * the application, the server emails the client a private link to finish it and fund
+ * their wallet. We never see that link again once it's sent.
  */
 export default function RegisterProjectDrawer({ open, onClose, onOpenIdeas, notify }: { open: boolean; onClose: () => void; onOpenIdeas: () => void; notify: Notify }) {
+  const settings = usePaymentSettings();
+  const fee = formatPrice(settings.commitmentFee, settings.currency);
   return (
     <AnimatePresence>
       {open && (
@@ -39,13 +43,13 @@ export default function RegisterProjectDrawer({ open, onClose, onOpenIdeas, noti
             <div className="flex items-center justify-between border-b border-line px-6 py-4">
               <div>
                 <h2 className="font-display text-xl font-bold">Start a walk-in application</h2>
-                <p className="text-xs text-muted">We save it as a draft and email the client a link to finish it and pay the {feeLabel()} commitment fee.</p>
+                <p className="text-xs text-muted">We save it as a draft and email the client a link to finish it and pay the {fee} commitment fee.</p>
               </div>
               <button onClick={onClose} aria-label="Close" className="rounded-full p-2 text-muted hover:bg-mist">
                 <X className="size-5" />
               </button>
             </div>
-            <WalkInForm onDone={onClose} onOpenIdeas={onOpenIdeas} notify={notify} />
+            <WalkInForm fee={fee} onDone={onClose} onOpenIdeas={onOpenIdeas} notify={notify} />
           </motion.aside>
         </motion.div>
       )}
@@ -53,94 +57,132 @@ export default function RegisterProjectDrawer({ open, onClose, onOpenIdeas, noti
   );
 }
 
-function WalkInForm({ onDone, onOpenIdeas, notify }: { onDone: () => void; onOpenIdeas: () => void; notify: Notify }) {
-  const me = useStaff();
+type Created = { idea: Idea; sentTo: string; devLink?: string; paidAtCentre: boolean };
+
+function WalkInForm({ fee, onDone, onOpenIdeas, notify }: { fee: string; onDone: () => void; onOpenIdeas: () => void; notify: Notify }) {
   const { ideaForm } = useSiteContent();
-  const clients = useMemo(() => existingClients(), []);
 
   const [search, setSearch] = useState("");
+  const [q, setQ] = useState("");
+  const { clients, loading: searching } = useStaffClients(q);
+
   const [client, setClient] = useState({ name: "", email: "", phone: "", organisation: "", country: "Nigeria", state: "", customCountry: "" });
   const [title, setTitle] = useState("");
   const [category, setCategory] = useState(ideaForm.categories[0] ?? "");
   const [platforms, setPlatforms] = useState<string[]>([]);
   const [budget, setBudget] = useState("");
-  const [brief, setBrief] = useState<StoredFileMeta | undefined>();
-  const [uploading, setUploading] = useState(false);
+  const [brief, setBrief] = useState<File | undefined>();
   const [payment, setPayment] = useState<"online" | "centre">("online");
   const [centreNote, setCentreNote] = useState("");
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const [created, setCreated] = useState<Idea | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState("");
+  const [created, setCreated] = useState<Created | null>(null);
+
+  // The client list comes from the server, so wait until they stop typing.
+  useEffect(() => {
+    const timer = window.setTimeout(() => setQ(search.trim()), 300);
+    return () => window.clearTimeout(timer);
+  }, [search]);
 
   const setC = (patch: Partial<typeof client>) => setClient((c) => ({ ...c, ...patch }));
   const country = findCountry(client.country);
-  const q = search.trim().toLowerCase();
-  const matches = q.length < 2 ? [] : clients.filter((c) => [c.name, c.email ?? "", c.organisation ?? ""].some((s) => s.toLowerCase().includes(q))).slice(0, 5);
+  const matches = clients.slice(0, 5);
 
-  const submit = (e: React.FormEvent) => {
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (busy) return;
     const next: Record<string, string> = {};
     if (client.name.trim().length < 2) next.name = "Enter the client's name.";
     if (!/^\S+@\S+\.\S+$/.test(client.email.trim())) next.email = "The client needs an email to receive their link.";
-    if (client.phone.replace(/\D/g, "").length < 10) next.phone = "Enter a phone number for SMS.";
+    if (client.phone && client.phone.replace(/\D/g, "").length < 10) next.phone = "Enter a phone number we can text.";
     if (client.country === OTHER_COUNTRY && client.customCountry.trim().length < 2) next.customCountry = "Enter the country.";
-    if (!client.state.trim()) next.state = "Choose the state / region.";
     if (title.trim().length < 2) next.title = "Enter a working name for the idea.";
-    if (platforms.length === 0) next.platforms = "Pick at least one.";
     setErrors(next);
     if (Object.keys(next).length) return;
 
-    const idea = startWalkInApplication(
-      {
+    setBusy(true);
+    setStatus("Starting the application…");
+    try {
+      const result = await startWalkInApplication({
         name: client.name.trim(),
         email: client.email.trim(),
-        phone: client.phone.trim(),
+        phone: client.phone.trim() || undefined,
         organisation: client.organisation.trim() || undefined,
         country: client.country === OTHER_COUNTRY ? client.customCountry.trim() : client.country,
-        state: client.state,
+        state: client.state || undefined,
         title: title.trim(),
         category,
-        platforms,
-        budget,
-        brief,
-        paidAtCentre: payment === "centre" ? { note: centreNote.trim() || "Paid at centre" } : undefined,
-      },
-      actingAs(me),
-    );
-    setCreated(idea);
-    notify(`Application ${idea.ref} started. Link emailed to ${idea.email}.`);
+        platforms: platforms.length ? platforms : undefined,
+        budget: budget || undefined,
+        attachment: brief,
+      });
+
+      let paidAtCentre = false;
+      if (payment === "centre") {
+        setStatus("Recording the payment taken at the centre…");
+        try {
+          await recordCentrePayment(result.idea.id, { senderName: client.name.trim(), note: centreNote.trim() || "Paid at the centre" });
+          paidAtCentre = true;
+        } catch (err) {
+          // The application exists either way, so say what happened and carry on.
+          notify(`Application started, but the payment wasn't recorded: ${errorMessage(err)}`, "info");
+        }
+      }
+
+      setCreated({ idea: result.idea, sentTo: result.sentTo, devLink: result.devLink, paidAtCentre });
+      notify(`Application ${result.idea.ref} started. Link emailed to ${result.sentTo}.`);
+      setStatus("");
+    } catch (err) {
+      const message = errorMessage(err);
+      setStatus(message);
+      notify(message, "info");
+    } finally {
+      setBusy(false);
+    }
   };
 
   if (created) {
-    const link = resumeLink(created)!;
-    const paid = feeState(created) === "PAID";
     return (
       <div className="flex-1 overflow-y-auto px-6 py-10 text-center">
         <CheckCircle2 className="mx-auto size-14 text-teal" />
-        <p className="mt-3 font-display text-2xl font-bold">Application started for {created.name}</p>
+        <p className="mt-3 font-display text-2xl font-bold">Application started for {created.idea.name ?? client.name}</p>
         <p className="mx-auto mt-1 max-w-sm text-sm text-muted">
-          We emailed {created.email} a link to add the idea details{paid ? "" : ` and pay the ${feeLabel()} fee`}. It reaches the inbox once they submit.
+          We emailed {created.sentTo} a private link to add the idea details{created.paidAtCentre ? "" : ` and pay the ${fee} fee`}. It reaches the inbox once they submit it.
         </p>
         <div className="mx-auto mt-5 flex max-w-xs items-center justify-between rounded-2xl bg-mist px-4 py-3">
           <span className="text-left">
             <span className="block text-xs text-muted">Reference</span>
-            <span className="font-mono text-lg font-bold">{created.ref}</span>
+            <span className="font-mono text-lg font-bold">{created.idea.ref}</span>
           </span>
-          <span className={cn("rounded-full px-2.5 py-1 text-[10px] font-bold uppercase", paid ? "bg-teal-soft text-teal-700" : "bg-line text-muted")}>{paid ? "Fee paid" : "Fee unpaid"}</span>
+          <span className={cn("rounded-full px-2.5 py-1 text-[10px] font-bold uppercase", created.paidAtCentre ? "bg-teal-soft text-teal-700" : "bg-line text-muted")}>
+            {created.paidAtCentre ? "Fee paid" : "Fee unpaid"}
+          </span>
         </div>
-        <div className="mx-auto mt-4 flex max-w-xs flex-col gap-2">
-          <button
-            onClick={() => {
-              navigator.clipboard?.writeText(`${window.location.origin}${link}`).catch(() => {});
-              notify("Continue link copied. Only share it with the client.", "info");
-            }}
-            className="flex h-10 items-center justify-center gap-2 rounded-xl border border-line text-sm font-bold"
-          >
-            <Copy className="size-4" /> Copy client link
-          </button>
-          <a href={link} target="_blank" className="flex h-10 items-center justify-center gap-2 rounded-xl border border-dashed border-line text-sm font-bold text-muted">
-            <Link2 className="size-4" /> Demo: open as client
-          </a>
-        </div>
+
+        <p className="mx-auto mt-4 flex max-w-xs items-start gap-2 rounded-xl bg-blue-soft px-3 py-2.5 text-left text-xs text-navy/80">
+          <Mail className="mt-0.5 size-4 shrink-0" />
+          The link is private to the client, so we can&apos;t show it here. If it doesn&apos;t arrive, open the draft in the ideas inbox and email it again.
+        </p>
+
+        {created.devLink && (
+          <div className="mx-auto mt-4 max-w-xs rounded-xl border border-brand/30 bg-brand-soft/40 p-3 text-left">
+            <p className="text-xs font-bold">Client link (test server only)</p>
+            <div className="mt-1.5 flex items-center gap-2">
+              <code className="min-w-0 flex-1 truncate rounded-lg bg-white px-2.5 py-1.5 font-mono text-[11px]">{created.devLink}</code>
+              <button
+                onClick={() => {
+                  navigator.clipboard?.writeText(created.devLink ?? "").catch(() => {});
+                  notify("Continue link copied. Only share it with the client.", "info");
+                }}
+                className="flex shrink-0 items-center gap-1 rounded-lg border border-line bg-white px-2.5 py-1.5 text-[11px] font-bold hover:border-navy"
+              >
+                <Copy className="size-3" /> Copy
+              </button>
+            </div>
+          </div>
+        )}
+
         <div className="mx-auto mt-6 flex max-w-xs gap-2">
           <button onClick={onDone} className="h-11 flex-1 rounded-xl border border-line font-bold text-muted">
             Close
@@ -167,16 +209,30 @@ function WalkInForm({ onDone, onOpenIdeas, notify }: { onDone: () => void; onOpe
           <div className="mt-3">
             <div className="flex h-11 items-center gap-2 rounded-xl border border-line px-3 focus-within:border-brand">
               <Search className="size-4 text-muted" />
-              <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Returning client? Search to fill in their details" aria-label="Search existing clients" className="w-full bg-transparent text-sm outline-none" />
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Returning client? Search to fill in their details"
+                aria-label="Search existing clients"
+                className="w-full bg-transparent text-sm outline-none"
+              />
+              {searching && <Loader2 className="size-4 shrink-0 animate-spin text-brand" />}
             </div>
             {matches.length > 0 && (
               <ul className="mt-1.5 space-y-1">
                 {matches.map((c) => (
-                  <li key={c.name + c.email}>
+                  <li key={c.id}>
                     <button
                       type="button"
                       onClick={() => {
-                        setC({ name: c.name, email: c.email ?? "", phone: c.phone ?? "", organisation: c.organisation ?? "" });
+                        setC({
+                          name: c.name,
+                          email: c.email ?? "",
+                          phone: c.phone ?? "",
+                          organisation: c.organisation ?? "",
+                          country: c.country ?? "Nigeria",
+                          state: c.state ?? "",
+                        });
                         setSearch("");
                       }}
                       className="flex w-full items-center justify-between gap-3 rounded-xl border border-line px-3 py-2 text-left text-sm hover:border-navy/30"
@@ -201,7 +257,7 @@ function WalkInForm({ onDone, onOpenIdeas, notify }: { onDone: () => void; onOpe
             <Field label="Email" error={errors.email}>
               <input type="email" value={client.email} onChange={(e) => setC({ email: e.target.value })} className={inputClass} />
             </Field>
-            <Field label="Phone" error={errors.phone}>
+            <Field label="Phone (optional)" error={errors.phone}>
               <input type="tel" value={client.phone} onChange={(e) => setC({ phone: e.target.value })} className={inputClass} />
             </Field>
             <Field label="Country">
@@ -262,7 +318,13 @@ function WalkInForm({ onDone, onOpenIdeas, notify }: { onDone: () => void; onOpe
               {ideaForm.platforms.map((p) => {
                 const on = platforms.includes(p);
                 return (
-                  <button key={p} type="button" aria-pressed={on} onClick={() => setPlatforms(on ? platforms.filter((x) => x !== p) : [...platforms, p])} className={cn("rounded-full border px-3 py-1.5 text-xs font-bold transition", on ? "border-navy bg-navy text-white" : "border-line text-muted hover:text-navy")}>
+                  <button
+                    key={p}
+                    type="button"
+                    aria-pressed={on}
+                    onClick={() => setPlatforms(on ? platforms.filter((x) => x !== p) : [...platforms, p])}
+                    className={cn("rounded-full border px-3 py-1.5 text-xs font-bold transition", on ? "border-navy bg-navy text-white" : "border-line text-muted hover:text-navy")}
+                  >
                     {p}
                   </button>
                 );
@@ -281,8 +343,9 @@ function WalkInForm({ onDone, onOpenIdeas, notify }: { onDone: () => void; onOpe
               </div>
             ) : (
               <label className="flex cursor-pointer items-center gap-2 rounded-xl border-2 border-dashed border-line px-3 py-3 text-sm hover:border-brand/40">
-                {uploading ? <Loader2 className="size-4 animate-spin text-brand" /> : <UploadCloud className="size-4 text-brand" />}
+                <UploadCloud className="size-4 text-brand" />
                 <span className="font-bold">Attach PDF</span>
+                <span className="text-xs text-muted">(uploaded when you start the application)</span>
                 <input
                   type="file"
                   accept="application/pdf,.pdf"
@@ -293,9 +356,8 @@ function WalkInForm({ onDone, onOpenIdeas, notify }: { onDone: () => void; onOpe
                     if (!f) return;
                     const problem = await validatePdf(f);
                     if (problem) return setErrors((x) => ({ ...x, brief: problem }));
-                    setUploading(true);
-                    setBrief(await saveFile(f));
-                    setUploading(false);
+                    setErrors((x) => ({ ...x, brief: "" }));
+                    setBrief(f);
                   }}
                 />
               </label>
@@ -305,12 +367,12 @@ function WalkInForm({ onDone, onOpenIdeas, notify }: { onDone: () => void; onOpe
         </section>
 
         <section className="space-y-3">
-          <h3 className="font-display font-bold">{feeLabel()} commitment fee</h3>
+          <h3 className="font-display font-bold">{fee} commitment fee</h3>
           <div role="radiogroup" aria-label="Commitment fee" className="grid gap-2 sm:grid-cols-2">
             {(
               [
                 ["online", CreditCard, "Client pays from their link", "Paystack or bank transfer"],
-                ["centre", Banknote, "Paid here at the centre", "Recorded as paid now"],
+                ["centre", Banknote, "Paid here at the centre", "Recorded and confirmed now"],
               ] as const
             ).map(([key, Icon, label, hint]) => (
               <button
@@ -321,7 +383,9 @@ function WalkInForm({ onDone, onOpenIdeas, notify }: { onDone: () => void; onOpe
                 onClick={() => setPayment(key)}
                 className={cn("flex items-start gap-3 rounded-xl border p-3 text-left transition", payment === key ? "border-brand bg-brand-soft/40 ring-2 ring-brand/20" : "border-line hover:border-navy/30")}
               >
-                <span className={cn("mt-0.5 grid size-5 shrink-0 place-items-center rounded-full border-2", payment === key ? "border-brand bg-brand text-white" : "border-line")}>{payment === key && <Check className="size-3" />}</span>
+                <span className={cn("mt-0.5 grid size-5 shrink-0 place-items-center rounded-full border-2", payment === key ? "border-brand bg-brand text-white" : "border-line")}>
+                  {payment === key && <Check className="size-3" />}
+                </span>
                 <span>
                   <span className="flex items-center gap-1.5 text-sm font-bold">
                     <Icon className="size-4" /> {label}
@@ -337,12 +401,20 @@ function WalkInForm({ onDone, onOpenIdeas, notify }: { onDone: () => void; onOpe
             </Field>
           )}
         </section>
+
+        <p role="status" aria-live="polite" className={cn("flex items-center gap-2 text-sm text-muted", !status && "sr-only")}>
+          {busy && <Loader2 className="size-4 animate-spin text-brand" />}
+          {status}
+        </p>
       </div>
+
       <div className="flex gap-2 border-t border-line px-6 py-4">
-        <button type="button" onClick={onDone} className="h-11 flex-1 rounded-xl border border-line font-bold text-muted">
+        <button type="button" onClick={onDone} disabled={busy} className="h-11 flex-1 rounded-xl border border-line font-bold text-muted disabled:opacity-50">
           Cancel
         </button>
-        <button className="h-11 flex-1 rounded-xl bg-brand font-bold text-white hover:bg-brand-600">Start & email link</button>
+        <button disabled={busy} className="flex h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-brand font-bold text-white hover:bg-brand-600 disabled:opacity-60">
+          {busy && <Loader2 className="size-4 animate-spin" />} {busy ? "Starting…" : "Start & email link"}
+        </button>
       </div>
     </form>
   );

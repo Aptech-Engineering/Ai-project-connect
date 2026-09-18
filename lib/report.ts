@@ -1,9 +1,16 @@
+/**
+ * The client's PDF status report.
+ *
+ * Everything on the page comes from the project JSON the API returns, plus the
+ * managed course/technology lists fetched from the API when the report is built.
+ */
 import { jsPDF } from "jspdf";
+import { api } from "./api";
 import { STAGES, TIMELINE, clientUpdates, timelineStep } from "./data";
-import { findCourse, findTechnology } from "./catalog";
+import { readCourses, readTechnologies } from "./catalog";
 import { stageMeaning } from "./content";
 import { formatDate } from "./format";
-import type { Project, SharedFile, Tone } from "./types";
+import type { Course, Project, Technology, Tone } from "./types";
 
 type RGB = [number, number, number];
 
@@ -87,7 +94,25 @@ function footers(doc: jsPDF) {
   }
 }
 
+/**
+ * The managed lists the report needs. They are fetched fresh so the PDF matches
+ * the site even if the reader never scrolled past a section that loads them;
+ * whatever the app has already cached is the fallback when the request fails.
+ */
+async function catalog() {
+  try {
+    const [technologies, courses] = await Promise.all([api.get<Technology[]>("/technologies"), api.get<Course[]>("/courses")]);
+    return { technologies, courses };
+  } catch {
+    return { technologies: readTechnologies(), courses: readCourses() };
+  }
+}
+
 export async function downloadProjectReport(project: Project) {
+  const { technologies, courses } = await catalog();
+  const findTechnology = (id: string) => technologies.find((t) => t.id === id);
+  const findCourse = (id: string) => courses.find((c) => c.id === id);
+
   const doc = new jsPDF({ unit: "mm", format: "a4" });
   const stage = STAGES[project.stage];
   let y = 0;
@@ -313,56 +338,11 @@ export async function downloadProjectReport(project: Project) {
   doc.setTextColor(...NAVY);
   courseIds.forEach((id) => {
     const c = findCourse(id)!;
-    doc.text(clean(`- ${c.title} (${c.duration}, starts ${formatDate(c.nextStart)})`), M, y);
+    const start = c.nextStart ? `, starts ${formatDate(c.nextStart)}` : "";
+    doc.text(clean(`- ${c.title} (${c.duration}${start})`), M, y);
     y += 5;
   });
 
   footers(doc);
   doc.save(`${project.code}-status-report.pdf`);
-}
-
-/** Mock shared files are generated on the fly so downloads work without a backend. */
-export async function downloadMockFile(project: Project, file: SharedFile) {
-  const doc = new jsPDF({ unit: "mm", format: "a4" });
-  header(doc, project, clean(project.title));
-  let y = 58;
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(20);
-  doc.setTextColor(...NAVY);
-  doc.text(clean(file.name.replace(/\.pdf$/, "").replace(/-/g, " ")), M, y);
-  y += 8;
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(10);
-  doc.setTextColor(...MUTED);
-  doc.text(`Shared ${formatDate(file.date)}  |  ${project.code}`, M, y);
-  y += 14;
-  doc.setFillColor(...ORANGE_SOFT);
-  doc.roundedRect(M, y, CONTENT_W, 22, 3, 3, "F");
-  doc.setTextColor(...NAVY);
-  doc.setFontSize(10.5);
-  doc.text(
-    doc.splitTextToSize(
-      "This is a sample document generated for the AI Project Connect demo. In the live product, this file is uploaded by your engineering team and stored securely.",
-      CONTENT_W - 12,
-    ),
-    M + 6,
-    y + 8,
-  );
-  y += 34;
-  for (let i = 0; i < 9; i++) {
-    doc.setFillColor(...(i % 4 === 0 ? LINE : MIST));
-    doc.roundedRect(M, y, i % 4 === 0 ? CONTENT_W * 0.45 : CONTENT_W * (0.7 + ((i * 13) % 30) / 100), i % 4 === 0 ? 5 : 3.5, 1.5, 1.5, "F");
-    y += i % 4 === 3 ? 12 : 7;
-  }
-  footers(doc);
-  doc.save(file.name);
-}
-
-/** Downloads a shared file: the real upload if one was stored, otherwise a generated sample. */
-export async function downloadSharedFile(project: Project, file: SharedFile) {
-  if (file.blobId) {
-    const { openStoredFile } = await import("./files");
-    if (await openStoredFile(file.blobId, file.name, "download")) return;
-  }
-  await downloadMockFile(project, file);
 }

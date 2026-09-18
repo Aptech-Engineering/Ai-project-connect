@@ -28,6 +28,8 @@ export interface StageInfo {
 }
 
 export interface Person {
+  /** Staff user id when the person is a team member. */
+  id?: number | null;
   name: string;
   role: string;
 }
@@ -37,7 +39,7 @@ export interface Course {
   title: string;
   duration: string;
   format: string;
-  nextStart: string;
+  nextStart: string | null;
   /** Full price in the course currency, e.g. 185000. */
   price: number;
   currency: string;
@@ -93,8 +95,8 @@ export interface SharedFile {
   size: string;
   date: string;
   uploadedBy?: string;
-  /** Real uploaded file stored in the browser (IndexedDB). */
-  blobId?: string;
+  /** Where the API serves it, e.g. /api/staff/files/abc123. */
+  url?: string;
   /** Who shared it: the team (default) or the client. */
   source?: "team" | "client";
   note?: string;
@@ -189,10 +191,15 @@ export interface Notice {
 }
 
 export interface Activity {
-  id: string;
+  id: string | number;
   at: string;
   actor: string;
   action: string;
+  actorType?: "staff" | "client" | "system";
+  projectCode?: string | null;
+  projectTitle?: string | null;
+  /** Where the action came from, for the audit trail. */
+  ip?: string | null;
 }
 
 export interface Project {
@@ -224,6 +231,25 @@ export interface Project {
   digestOptOut?: boolean;
   changeRequests?: ChangeRequest[];
   handover?: Handover;
+  /** Commitment fee ledger of the application this project came from, when there was one. */
+  wallet?: WalletLedgerEntry[] | null;
+  /** Courses the client has already asked about from this project (client view only). */
+  courseRequests?: { techId: string; type: "info" | "enrol" }[];
+  budget?: string;
   /** Old Project IDs that were regenerated and no longer grant access. */
   revokedCodes?: string[];
+}
+
+/** One line of a commitment fee ledger, as the API returns it. */
+export interface WalletLedgerEntry {
+  type: "fee" | "payment" | "refund";
+  label: string;
+  amount: number;
+  currency: string;
+  status: string;
+  reference?: string | null;
+  at?: string | null;
+  method?: string | null;
+  receiptNo?: string | null;
+  note?: string | null;
 }

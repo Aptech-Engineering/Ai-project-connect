@@ -2,37 +2,66 @@
 
 import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { BadgePercent, CalendarDays, CheckCircle2, ChevronDown, Clock, ExternalLink, GraduationCap, MonitorSmartphone, UserPlus, Wallet } from "lucide-react";
+import { BadgePercent, CalendarDays, CheckCircle2, ChevronDown, Clock, ExternalLink, GraduationCap, Loader2, MonitorSmartphone, UserPlus, Wallet } from "lucide-react";
 import StoredImage from "../StoredImage";
 import { discountedPrice, formatPrice, useCatalog } from "@/lib/catalog";
 import { useSiteContent } from "@/lib/content";
 import { cn, formatDate } from "@/lib/format";
-import type { Project } from "@/lib/types";
+import type { Project, Technology } from "@/lib/types";
 import type { Notify } from "../PortalApp";
 import { requestCourse, setPromosOptOut } from "@/lib/actions";
 import { inviteToCourse, trackCourseClick } from "@/lib/flows";
-import { useLeads } from "@/lib/store";
+import { errorMessage } from "@/lib/api";
+import { useApi } from "@/lib/remote";
 
 type LeadState = "info" | "enrol";
+
+/**
+ * Course requests this client has already made, newest per technology.
+ * The client project carries them; `courseRequests` isn't on the shared Project
+ * type yet, so it is read through a narrowed structural view rather than `any`.
+ */
+function requestedCourses(project: Project): Record<string, LeadState> {
+  const list = (project as Project & { courseRequests?: { techId: string; type: LeadState }[] }).courseRequests ?? [];
+  return Object.fromEntries(list.map((l) => [l.techId, l.type]));
+}
 
 export default function StackPanel({ project, notify }: { project: Project; notify: Notify }) {
   const [open, setOpen] = useState<string | null>(null);
   const { courses, technologies } = useCatalog();
+  // Names and plain-language explanations come from the managed technology list.
+  const { loading: catalogLoading, error: catalogError, refresh: refreshCatalog } = useApi<Technology[]>("/technologies");
   const { portal } = useSiteContent();
   const promos = !project.promosOptOut;
-  const leads = Object.fromEntries(
-    useLeads()
-      .filter((l) => l.projectCode === project.code)
-      .reverse()
-      .map((l) => [l.techId, l.type]),
-  ) as Record<string, LeadState>;
+  const requested = requestedCourses(project);
+  const [busyTech, setBusyTech] = useState<string | null>(null);
+  const [savingPromos, setSavingPromos] = useState(false);
 
-  const createLead = (techId: string, type: LeadState) => {
+  const createLead = async (techId: string, type: LeadState) => {
     const tech = technologies[techId];
     const course = tech ? courses[tech.courseId] : undefined;
-    if (!tech || !course) return;
-    requestCourse(project, techId, type);
-    notify(type === "enrol" ? `Enrolment started for ${course.title}. ${portal.counsellorPromise}` : `Request sent! A counsellor will share details about the ${tech.name} course.`);
+    if (!tech || !course || busyTech) return;
+    setBusyTech(techId);
+    try {
+      await requestCourse(project.code, techId, type);
+      notify(type === "enrol" ? `Enrolment started for ${course.title}. ${portal.counsellorPromise}` : `Request sent! A counsellor will share details about the ${tech.name} course.`);
+    } catch (e) {
+      notify(errorMessage(e), "info");
+    } finally {
+      setBusyTech(null);
+    }
+  };
+
+  const togglePromos = async () => {
+    setSavingPromos(true);
+    try {
+      await setPromosOptOut(project.code, promos);
+      notify(promos ? "Course suggestions hidden. You can turn them back on anytime." : "Course suggestions are back on.", "info");
+    } catch (e) {
+      notify(errorMessage(e), "info");
+    } finally {
+      setSavingPromos(false);
+    }
   };
 
   const stack = project.stack.filter((s) => technologies[s.techId]);
@@ -54,7 +83,30 @@ export default function StackPanel({ project, notify }: { project: Project; noti
         <h4 className="font-display text-lg font-bold">{portal.stackTitle}</h4>
         <p className="mt-1 text-sm text-white/60">{portal.stackSubtitle}</p>
 
-        {stack.length === 0 && (
+        {stack.length === 0 && catalogLoading && (
+          <ul className="mt-5 space-y-2.5" aria-hidden>
+            {[0, 1, 2].map((i) => (
+              <li key={i} className="flex items-start gap-3 rounded-2xl border border-white/10 bg-white/[0.03] p-3.5">
+                <span className="size-10 shrink-0 animate-pulse rounded-xl bg-white/10" />
+                <span className="flex-1 space-y-2 py-1">
+                  <span className="block h-3 w-1/3 animate-pulse rounded bg-white/10" />
+                  <span className="block h-2.5 w-4/5 animate-pulse rounded bg-white/10" />
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        {stack.length === 0 && !catalogLoading && catalogError && (
+          <div role="alert" className="mt-5 rounded-2xl border border-white/15 p-4 text-sm text-white/70">
+            <p>{catalogError}</p>
+            <button onClick={() => void refreshCatalog()} className="mt-3 rounded-full bg-white/10 px-4 py-2 text-xs font-bold text-white transition hover:bg-white/20">
+              Try again
+            </button>
+          </div>
+        )}
+
+        {stack.length === 0 && !catalogLoading && !catalogError && (
           <p className="mt-5 rounded-2xl border border-dashed border-white/15 p-4 text-sm text-white/60">
             Your team is choosing the right tools. They&apos;ll appear here with simple explanations.
           </p>
@@ -65,7 +117,7 @@ export default function StackPanel({ project, notify }: { project: Project; noti
             const course = courses[t.courseId];
             const hasCourse = Boolean(course?.published);
             const isOpen = open === techId && promos && hasCourse;
-            const lead = leads[techId];
+            const lead = requested[techId];
             return (
               <motion.li
                 key={techId}
@@ -131,7 +183,7 @@ export default function StackPanel({ project, notify }: { project: Project; noti
                           <dl className="mt-3 grid grid-cols-2 gap-2 text-xs">
                             <Fact icon={<Clock className="size-3.5" />} label="Duration" value={course.duration} />
                             <Fact icon={<MonitorSmartphone className="size-3.5" />} label="Format" value={course.format} />
-                            <Fact icon={<CalendarDays className="size-3.5" />} label="Next start" value={formatDate(course.nextStart)} />
+                            <Fact icon={<CalendarDays className="size-3.5" />} label="Next start" value={course.nextStart ? formatDate(course.nextStart) : "To be announced"} />
                             <Fact icon={<Wallet className="size-3.5" />} label="Fee" value={formatPrice(course.price, course.currency)} />
                           </dl>
                           {course.discountPercent ? (
@@ -153,6 +205,7 @@ export default function StackPanel({ project, notify }: { project: Project; noti
                             <motion.p
                               initial={{ opacity: 0, scale: 0.95 }}
                               animate={{ opacity: 1, scale: 1 }}
+                              aria-live="polite"
                               className="mt-3 flex items-center gap-2 rounded-lg bg-mist px-3 py-2.5 text-sm font-bold"
                             >
                               <CheckCircle2 className="size-4 text-teal" />
@@ -161,15 +214,18 @@ export default function StackPanel({ project, notify }: { project: Project; noti
                           ) : (
                             <div className="mt-3 grid grid-cols-2 gap-2">
                               <button
-                                onClick={() => createLead(techId, "info")}
-                                className="rounded-xl border border-line py-2.5 text-sm font-bold transition hover:border-navy"
+                                onClick={() => void createLead(techId, "info")}
+                                disabled={busyTech !== null}
+                                className="rounded-xl border border-line py-2.5 text-sm font-bold transition hover:border-navy disabled:opacity-50"
                               >
                                 Request info
                               </button>
                               <button
-                                onClick={() => createLead(techId, "enrol")}
-                                className="rounded-xl bg-brand py-2.5 text-sm font-bold text-white transition hover:bg-brand-600"
+                                onClick={() => void createLead(techId, "enrol")}
+                                disabled={busyTech !== null}
+                                className="flex items-center justify-center gap-1.5 rounded-xl bg-brand py-2.5 text-sm font-bold text-white transition hover:bg-brand-600 disabled:opacity-50"
                               >
+                                {busyTech === techId && <Loader2 className="size-4 animate-spin" />}
                                 Enrol
                               </button>
                             </div>
@@ -204,11 +260,9 @@ export default function StackPanel({ project, notify }: { project: Project; noti
             role="switch"
             aria-checked={promos}
             aria-labelledby="promo-label"
-            onClick={() => {
-              setPromosOptOut(project, promos);
-              notify(promos ? "Course suggestions hidden. You can turn them back on anytime." : "Course suggestions are back on.", "info");
-            }}
-            className={cn("relative h-6 w-11 rounded-full transition", promos ? "bg-teal" : "bg-white/20")}
+            disabled={savingPromos}
+            onClick={() => void togglePromos()}
+            className={cn("relative h-6 w-11 rounded-full transition disabled:opacity-60", promos ? "bg-teal" : "bg-white/20")}
           >
             <motion.span
               layout
@@ -239,7 +293,26 @@ function InviteTeamMember({ project, techId, courseTitle, notify }: { project: P
   const [email, setEmail] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [sending, setSending] = useState(false);
   const valid = name.trim().length > 1 && /^\S+@\S+\.\S+$/.test(email.trim());
+
+  const send = async () => {
+    setSending(true);
+    setError("");
+    try {
+      const invitee = name.trim();
+      await inviteToCourse(project.code, { techId, name: invitee, email: email.trim(), message: message.trim() || undefined });
+      notify(`Invitation sent to ${invitee} for ${courseTitle}.`);
+      setOpen(false);
+      setName("");
+      setEmail("");
+      setMessage("");
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setSending(false);
+    }
+  };
 
   if (!open) {
     return (
@@ -253,27 +326,24 @@ function InviteTeamMember({ project, techId, courseTitle, notify }: { project: P
       className="mt-3 space-y-2 rounded-xl bg-mist p-3"
       onSubmit={(e) => {
         e.preventDefault();
-        if (!valid) return;
-        const problem = inviteToCourse(project, techId, name.trim(), email.trim(), message.trim() || undefined);
-        if (problem) return setError(problem);
-        notify(`Invitation sent to ${name.trim()} for ${courseTitle}.`);
-        setOpen(false);
-        setName("");
-        setEmail("");
-        setMessage("");
+        if (!valid || sending) return;
+        void send();
       }}
     >
       <p className="text-xs font-bold">Invite someone from your team</p>
       <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Their name" aria-label="Their name" className="h-9 w-full rounded-lg border border-line bg-white px-3 text-sm outline-none focus:border-brand" />
       <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Their email" aria-label="Their email" className="h-9 w-full rounded-lg border border-line bg-white px-3 text-sm outline-none focus:border-brand" />
       <input value={message} onChange={(e) => setMessage(e.target.value)} placeholder="Short message (optional)" aria-label="Message" className="h-9 w-full rounded-lg border border-line bg-white px-3 text-sm outline-none focus:border-brand" />
-      {error && <p className="text-xs font-bold text-danger">{error}</p>}
+      <div aria-live="polite" className="min-h-0">
+        {error && <p className="text-xs font-bold text-danger">{error}</p>}
+      </div>
       <div className="grid grid-cols-2 gap-2">
-        <button type="button" onClick={() => setOpen(false)} className="h-9 rounded-lg border border-line bg-white text-xs font-bold text-muted">
+        <button type="button" onClick={() => setOpen(false)} disabled={sending} className="h-9 rounded-lg border border-line bg-white text-xs font-bold text-muted disabled:opacity-50">
           Cancel
         </button>
-        <button disabled={!valid} className="h-9 rounded-lg bg-navy text-xs font-bold text-white disabled:opacity-40">
-          Send invite
+        <button disabled={!valid || sending} className="flex h-9 items-center justify-center gap-1.5 rounded-lg bg-navy text-xs font-bold text-white disabled:opacity-40">
+          {sending && <Loader2 className="size-3.5 animate-spin" />}
+          {sending ? "Sending…" : "Send invite"}
         </button>
       </div>
     </form>

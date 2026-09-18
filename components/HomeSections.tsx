@@ -2,12 +2,14 @@
 
 import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowRight, BadgePercent, CalendarDays, CheckCircle2, Clock, ExternalLink, GraduationCap, Megaphone, MonitorSmartphone, X } from "lucide-react";
+import { AlertCircle, ArrowRight, BadgePercent, CalendarDays, CheckCircle2, Clock, ExternalLink, GraduationCap, Loader2, Megaphone, MonitorSmartphone, RefreshCw, X } from "lucide-react";
 import StoredImage from "./StoredImage";
-import { discountedPrice, formatPrice, useCatalog } from "@/lib/catalog";
+import { discountedPrice, formatPrice, useCourses } from "@/lib/catalog";
 import { SUBMIT_IDEA_HREF, useSiteContent } from "@/lib/content";
 import { requestCourseEnquiry } from "@/lib/actions";
 import { trackCourseView } from "@/lib/flows";
+import { errorMessage } from "@/lib/api";
+import { useApi } from "@/lib/remote";
 import { cn, formatDate } from "@/lib/format";
 import type { Course } from "@/lib/types";
 import type { Notify } from "./PortalApp";
@@ -125,16 +127,35 @@ export function FliersSection({ onSubmitIdea }: { onSubmitIdea: () => void }) {
 
 export function CoursesSection({ notify }: { notify: Notify }) {
   const { courses: copy } = useSiteContent();
-  const { courseList } = useCatalog();
-  const list = courseList.filter((c) => c.published);
+  // The published list, plus the request state behind it so the section can show
+  // a skeleton instead of flashing empty while it loads.
+  const list = useCourses().filter((c) => c.published);
+  const { loading, error, refresh } = useApi<Course[]>("/courses");
   const [enquire, setEnquire] = useState<{ course: Course; type: "info" | "enrol" } | null>(null);
-  if (!copy.showOnHome || list.length === 0) return null;
+  if (!copy.showOnHome) return null;
+  if (!loading && !error && list.length === 0) return null;
 
   return (
-    <section id="courses" className="scroll-mt-16 bg-mist py-16 sm:py-20">
+    <section id="courses" aria-busy={loading && list.length === 0} className="scroll-mt-16 bg-mist py-16 sm:py-20">
       <div className="container-page">
         <SectionHeading eyebrow={copy.eyebrow} title={copy.title} subtitle={copy.subtitle} />
-        <div className="mt-10 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+
+        {loading && list.length === 0 && <CourseSkeletons />}
+
+        {error && list.length === 0 && (
+          <div role="alert" className="mx-auto mt-10 flex max-w-md flex-col items-center gap-3 rounded-3xl border border-line bg-white p-6 text-center shadow-sm">
+            <AlertCircle className="size-8 text-danger" />
+            <p className="text-sm text-muted">{error}</p>
+            <button
+              onClick={() => void refresh()}
+              className="flex items-center gap-2 rounded-full bg-navy px-4 py-2 text-sm font-bold text-white transition hover:bg-navy-700"
+            >
+              <RefreshCw className="size-4" /> Try again
+            </button>
+          </div>
+        )}
+
+        <div className={cn("grid gap-5 sm:grid-cols-2 lg:grid-cols-3", list.length > 0 && "mt-10")}>
           {list.map((c, i) => (
             <motion.article
               key={c.id}
@@ -165,7 +186,8 @@ export function CoursesSection({ notify }: { notify: Notify }) {
                     <Clock className="size-3.5 text-brand" /> {c.duration}
                   </li>
                   <li className="flex items-center gap-1.5">
-                    <CalendarDays className="size-3.5 text-brand" /> Starts {formatDate(c.nextStart, { day: "numeric", month: "short" })}
+                    <CalendarDays className="size-3.5 text-brand" />{" "}
+                    {c.nextStart ? `Starts ${formatDate(c.nextStart, { day: "numeric", month: "short" })}` : "Start date coming soon"}
                   </li>
                   <li className="col-span-2 flex items-center gap-1.5">
                     <MonitorSmartphone className="size-3.5 text-brand" /> {c.format}
@@ -219,6 +241,8 @@ function EnquiryDialog({ request, onClose, notify }: { request: { course: Course
   const [name, setName] = useState("");
   const [contact, setContact] = useState("");
   const [sent, setSent] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState("");
   const valid = name.trim().length > 1 && contact.trim().length > 5;
 
   const close = () => {
@@ -227,7 +251,23 @@ function EnquiryDialog({ request, onClose, notify }: { request: { course: Course
       setSent(false);
       setName("");
       setContact("");
+      setError("");
     }, 300);
+  };
+
+  const send = async () => {
+    if (!request) return;
+    setSending(true);
+    setError("");
+    try {
+      await requestCourseEnquiry(request.course.id, request.type, name.trim(), contact.trim());
+      setSent(true);
+      notify("Enquiry sent to our course counsellors.");
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setSending(false);
+    }
   };
 
   return (
@@ -260,10 +300,8 @@ function EnquiryDialog({ request, onClose, notify }: { request: { course: Course
               <form
                 onSubmit={(e) => {
                   e.preventDefault();
-                  if (!valid) return;
-                  requestCourseEnquiry(request.course.id, request.type, name.trim(), contact.trim());
-                  setSent(true);
-                  notify("Enquiry sent to our course counsellors.");
+                  if (!valid || sending) return;
+                  void send();
                 }}
               >
                 <p className="text-xs font-bold uppercase tracking-wider text-brand-700">{request.type === "enrol" ? "Enrol" : "Request info"}</p>
@@ -278,8 +316,12 @@ function EnquiryDialog({ request, onClose, notify }: { request: { course: Course
                   Email or phone
                 </label>
                 <input id="enq-contact" value={contact} onChange={(e) => setContact(e.target.value)} autoComplete="email" className="mt-1.5 h-11 w-full rounded-xl border border-line px-3.5 text-sm outline-none focus:border-brand focus:ring-4 focus:ring-brand/15" />
-                <button disabled={!valid} className={cn("mt-5 h-12 w-full rounded-xl bg-brand font-bold text-white transition hover:bg-brand-600 disabled:opacity-40")}>
-                  Send to a counsellor
+                <div aria-live="polite" className="min-h-0">
+                  {error && <p className="mt-3 text-sm font-bold text-danger">{error}</p>}
+                </div>
+                <button disabled={!valid || sending} className={cn("mt-5 flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-brand font-bold text-white transition hover:bg-brand-600 disabled:opacity-40")}>
+                  {sending && <Loader2 className="size-4 animate-spin" />}
+                  {sending ? "Sending…" : "Send to a counsellor"}
                 </button>
               </form>
             )}
@@ -287,6 +329,25 @@ function EnquiryDialog({ request, onClose, notify }: { request: { course: Course
         </motion.div>
       )}
     </AnimatePresence>
+  );
+}
+
+/** Placeholder cards while the course list loads, so the section keeps its shape. */
+function CourseSkeletons() {
+  return (
+    <div aria-hidden className="mt-10 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+      {[0, 1, 2].map((i) => (
+        <div key={i} className="overflow-hidden rounded-3xl border border-line bg-white shadow-sm">
+          <div className="aspect-[16/10] w-full animate-pulse bg-line" />
+          <div className="space-y-3 p-5">
+            <div className="h-4 w-3/4 animate-pulse rounded bg-line" />
+            <div className="h-3 w-full animate-pulse rounded bg-line" />
+            <div className="h-3 w-5/6 animate-pulse rounded bg-line" />
+            <div className="h-9 w-full animate-pulse rounded-xl bg-line" />
+          </div>
+        </div>
+      ))}
+    </div>
   );
 }
 

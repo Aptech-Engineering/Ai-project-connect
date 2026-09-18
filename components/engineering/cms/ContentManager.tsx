@@ -2,13 +2,11 @@
 
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Eye, EyeOff, FileText, Wallet, GraduationCap, Home, Layers, Megaphone, MessagesSquare, PanelBottom, Plus, RotateCcw, Save, Trash2, Undo2 } from "lucide-react";
+import { Eye, EyeOff, FileText, Wallet, GraduationCap, Home, Layers, Loader2, Megaphone, MessagesSquare, PanelBottom, Plus, RotateCcw, Save, Trash2, Undo2 } from "lucide-react";
 import { Card, ImagePicker, LinkList, StringList, TextArea, TextInput, Toggle } from "./fields";
 import { CoursesEditor, TechnologiesEditor } from "./CatalogEditors";
 import { publishSiteContent, resetSiteContent, useSiteContent, type Flier, type SiteContent } from "@/lib/content";
-import { resetCatalog } from "@/lib/catalog";
-import { logActivity } from "@/lib/store";
-import { useStaff } from "@/lib/staff";
+import { errorMessage } from "@/lib/api";
 import { STAGES } from "@/lib/data";
 import { cn } from "@/lib/format";
 import type { StageKey } from "@/lib/types";
@@ -28,11 +26,12 @@ const TABS: { key: Tab; label: string; icon: React.ElementType }[] = [
 ];
 
 export default function ContentManager({ notify }: { notify: Notify }) {
-  const me = useStaff();
   const live = useSiteContent();
   const [draft, setDraft] = useState<SiteContent>(live);
   const [tab, setTab] = useState<Tab>("home");
   const [confirmReset, setConfirmReset] = useState(false);
+  const [publishing, setPublishing] = useState(false);
+  const [resetting, setResetting] = useState(false);
   const dirty = JSON.stringify(draft) !== JSON.stringify(live);
 
   // Pick up changes published elsewhere (e.g. another tab) when there are no local edits.
@@ -44,10 +43,32 @@ export default function ContentManager({ notify }: { notify: Notify }) {
   const update = <K extends keyof SiteContent>(section: K, patch: Partial<SiteContent[K]>) =>
     setDraft((d) => ({ ...d, [section]: { ...d[section], ...patch } }));
 
-  const publish = () => {
-    publishSiteContent(draft);
-    logActivity(`${me.name} (Admin)`, "Published website content");
-    notify("Website updated. Changes are live on the site.");
+  const publish = async () => {
+    if (publishing) return;
+    setPublishing(true);
+    try {
+      await publishSiteContent(draft);
+      notify("Website updated. Changes are live on the site.");
+    } catch (e) {
+      // The server checks the shape of the document, so it can refuse a publish.
+      notify(errorMessage(e), "info");
+    } finally {
+      setPublishing(false);
+    }
+  };
+
+  const reset = async () => {
+    if (resetting) return;
+    setResetting(true);
+    try {
+      await resetSiteContent();
+      setConfirmReset(false);
+      notify("Website content reset to defaults.", "info");
+    } catch (e) {
+      notify(errorMessage(e), "info");
+    } finally {
+      setResetting(false);
+    }
   };
 
   return (
@@ -108,24 +129,21 @@ export default function ContentManager({ notify }: { notify: Notify }) {
 
       {/* danger zone */}
       <div className="mt-8 rounded-2xl border border-danger/20 bg-white p-5">
-        <p className="font-display font-bold text-danger">Reset website to defaults</p>
-        <p className="mt-1 text-sm text-muted">Restores all website text, courses, prices and technologies to the original content. Uploaded images stay in storage.</p>
+        <p className="font-display font-bold text-danger">Reset website text to defaults</p>
+        <p className="mt-1 text-sm text-muted">
+          Restores every piece of website and portal wording to the original content. Courses, technologies and uploaded images are left alone — delete those from their own tabs.
+        </p>
         {confirmReset ? (
           <div className="mt-3 flex flex-wrap gap-2">
-            <button onClick={() => setConfirmReset(false)} className="rounded-full border border-line px-4 py-2 text-sm font-bold text-muted">
+            <button onClick={() => setConfirmReset(false)} disabled={resetting} className="rounded-full border border-line px-4 py-2 text-sm font-bold text-muted disabled:opacity-50">
               Cancel
             </button>
             <button
-              onClick={() => {
-                resetSiteContent();
-                resetCatalog();
-                logActivity(`${me.name} (Admin)`, "Reset website content to defaults");
-                setConfirmReset(false);
-                notify("Website content reset to defaults.", "info");
-              }}
-              className="rounded-full bg-danger px-4 py-2 text-sm font-bold text-white"
+              onClick={() => void reset()}
+              disabled={resetting}
+              className="flex items-center gap-2 rounded-full bg-danger px-4 py-2 text-sm font-bold text-white disabled:opacity-60"
             >
-              Yes, reset everything
+              {resetting && <Loader2 className="size-4 animate-spin" />} {resetting ? "Resetting…" : "Yes, reset the text"}
             </button>
           </div>
         ) : (
@@ -144,15 +162,21 @@ export default function ContentManager({ notify }: { notify: Notify }) {
             exit={{ y: 80, opacity: 0 }}
             className="fixed inset-x-4 bottom-4 z-50 mx-auto flex max-w-2xl flex-col gap-3 rounded-2xl bg-navy p-3 pl-5 text-white shadow-2xl sm:flex-row sm:items-center lg:left-[calc(16rem+1rem)]"
           >
-            <p className="flex-1 text-sm">
-              <b>Unpublished changes.</b> <span className="text-white/65">Visitors still see the previous version.</span>
+            <p className="flex-1 text-sm" role="status" aria-live="polite">
+              {publishing ? (
+                <b>Publishing…</b>
+              ) : (
+                <>
+                  <b>Unpublished changes.</b> <span className="text-white/65">Visitors still see the previous version.</span>
+                </>
+              )}
             </p>
             <div className="flex gap-2">
-              <button onClick={() => setDraft(live)} className="flex items-center gap-1.5 rounded-xl px-4 py-2.5 text-sm font-bold text-white/80 hover:bg-white/10">
+              <button onClick={() => setDraft(live)} disabled={publishing} className="flex items-center gap-1.5 rounded-xl px-4 py-2.5 text-sm font-bold text-white/80 hover:bg-white/10 disabled:opacity-50">
                 <Undo2 className="size-4" /> Discard
               </button>
-              <button onClick={publish} className="flex items-center gap-1.5 rounded-xl bg-brand px-5 py-2.5 text-sm font-bold hover:bg-brand-600">
-                <Save className="size-4" /> Publish
+              <button onClick={() => void publish()} disabled={publishing} className="flex items-center gap-1.5 rounded-xl bg-brand px-5 py-2.5 text-sm font-bold hover:bg-brand-600 disabled:opacity-60">
+                {publishing ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />} {publishing ? "Publishing…" : "Publish"}
               </button>
             </div>
           </motion.div>

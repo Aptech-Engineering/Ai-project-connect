@@ -188,6 +188,18 @@ check('staff project view includes internal notes + activity', $r['status'] === 
 $r = call('POST', '/api/staff/projects/APC-26-7KQ9X/updates', ['as' => 'chioma', 'json' => ['title' => 'Checkout screens ready', 'body' => 'You can now try the full checkout.', 'visibility' => 'client']]);
 check('engineer client update → pending', $r['status'] === 201 && $r['body']['pending'] === true, $r['body']);
 $pendingId = $r['body']['id'] ?? 0;
+$r = call('GET', '/api/staff/approvals', ['as' => 'tunde']);
+$row = static fn (array $body): ?array => array_values(array_filter($body, static fn ($u) => $u['id'] === $pendingId))[0] ?? null;
+$pending = $row($r['body'] ?? []);
+check('approvals row carries the project lead and canApprove for that lead', $pending !== null && $pending['leadName'] === 'Tunde Bakare' && $pending['canApprove'] === true && $pending['projectCode'] === 'APC-26-7KQ9X', $pending);
+$forEngineer = $row(call('GET', '/api/staff/approvals', ['as' => 'chioma'])['body'] ?? []);
+check('engineer sees the row with canApprove false', $forEngineer !== null && $forEngineer['canApprove'] === false, $forEngineer);
+call('POST', '/api/staff/projects/APC-26-7KQ9X/members', ['as' => 'admin', 'json' => ['userId' => 3]]); // Grace joins the team
+$forOtherLead = $row(call('GET', '/api/staff/approvals', ['as' => 'grace'])['body'] ?? []);
+check("another project's lead sees canApprove false", $forOtherLead !== null && $forOtherLead['canApprove'] === false && $forOtherLead['leadName'] === 'Tunde Bakare', $forOtherLead);
+$forAdmin = $row(call('GET', '/api/staff/approvals', ['as' => 'admin'])['body'] ?? []);
+check('admin can approve any pending update', $forAdmin !== null && $forAdmin['canApprove'] === true);
+call('DELETE', '/api/staff/projects/APC-26-7KQ9X/members/3', ['as' => 'admin']);
 $r = call('POST', "/api/staff/updates/{$pendingId}/approve", ['as' => 'chioma']);
 check('engineer cannot approve → 403', $r['status'] === 403);
 $r = call('POST', "/api/staff/updates/{$pendingId}/approve", ['as' => 'grace']);
@@ -323,6 +335,44 @@ $has = static fn (string $needle) => (bool) array_filter($subjects, static fn ($
 check('notification log: OTP, welcome, stage, update, ID change, leads', $r['status'] === 200 && $has('sign-in code') && $has('Welcome to AI Project Connect') && $has('is now: Testing') && $has('New update on') && $has('Project ID has changed') && $has('enrolment'), $subjects);
 $r = call('GET', '/api/staff/notifications', ['as' => 'tunde']);
 check('lead cannot view notification log → 403', $r['status'] === 403);
+
+$log = call('GET', '/api/staff/notifications', ['as' => 'admin'])['body'] ?? [];
+$waiting = count(array_filter($log, static fn ($n) => in_array($n['status'], ['queued', 'failed'], true)));
+$r = call('GET', '/api/staff/dashboard', ['as' => 'admin']);
+check('admin dashboard badge counts queued + failed notifications', $r['status'] === 200 && ($r['body']['notifications'] ?? null) === $waiting && count($log) > $waiting, [$r['body']['notifications'] ?? null, $waiting, count($log)]);
+check('lead dashboard has no notification badge', !isset(call('GET', '/api/staff/dashboard', ['as' => 'tunde'])['body']['notifications']));
+
+$r = call('GET', '/api/admin/users', ['as' => 'admin']);
+$byName = array_column($r['body'] ?? [], null, 'name');
+// Tunde leads FarmLink, KoboSave and the project converted above (ShopBeta is delivered, so it doesn't count);
+// Zainab is on FarmLink, KoboSave and EduNest (plus delivered ShopBeta); David on FarmLink and EduNest; Aisha is a counsellor.
+check('admin users list shows active project workload', $r['status'] === 200 && ($byName['Tunde Bakare']['projectCount'] ?? null) === 3 && ($byName['Zainab Musa']['projectCount'] ?? null) === 3 && ($byName['David Nwosu']['projectCount'] ?? null) === 2 && ($byName['Aisha Bello']['projectCount'] ?? null) === 0, array_map(static fn ($u) => $u['projectCount'] ?? null, $byName));
+
+/* ---------------- text encoding (masked contacts, ₦ amounts) ---------------- */
+$r = call('GET', '/api/staff/projects/APC-26-B8WZ2', ['as' => 'admin']);
+$masked = ($r['body']['client']['emailMasked'] ?? '') . ' ' . ($r['body']['client']['phoneMasked'] ?? '');
+$mojibake = static fn (string $text): bool => str_contains($text, 'â') || str_contains($text, 'Ã') || str_contains($text, '€') || !mb_check_encoding($text, 'UTF-8');
+check('masked email + phone use real bullets, not mojibake', substr_count($masked, "\u{2022}") === 9 && !$mojibake($masked), $masked);
+check('project JSON is valid UTF-8 end to end', !$mojibake($r['raw']) && str_contains($r['headers'], 'charset=utf-8'));
+$r = call('GET', '/api/content');
+$budgets = implode(' ', $r['body']['ideaForm']['budgets'] ?? []);
+check('naira amounts in website content are clean UTF-8', str_contains($budgets, "\u{20A6}") && !$mojibake($budgets) && !$mojibake($r['raw']), $budgets);
+$sources = [];
+foreach ([__DIR__ . '/../src', __DIR__ . '/../database'] as $dir) {
+    if (!is_dir($dir)) {
+        continue;
+    }
+    foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator($dir)) as $file) {
+        if (!in_array($file->getExtension(), ['php', 'json', 'sql'], true)) {
+            continue;
+        }
+        $text = (string) file_get_contents($file->getPathname());
+        if (!mb_check_encoding($text, 'UTF-8') || str_contains($text, 'â€') || str_contains($text, 'Ã‚') || str_starts_with($text, "\xEF\xBB\xBF")) {
+            $sources[] = $file->getFilename();
+        }
+    }
+}
+check('backend sources are UTF-8 with no double-encoded characters or BOM', $sources === [], $sources);
 
 /* ---------------- rate limiting ---------------- */
 $locked = false;

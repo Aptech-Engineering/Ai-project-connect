@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { motion } from "framer-motion";
 import { ArrowLeft, CheckCircle2, KeyRound, Loader2, Mail, ShieldAlert } from "lucide-react";
-import { sendNotice } from "@/lib/store";
-import { findValidReset, requestPasswordReset, resetPasswordWithToken } from "@/lib/staff";
+import { errorMessage } from "@/lib/api";
+import { requestPasswordReset, resetPasswordWithToken } from "@/lib/staff";
 
 const inputClass = "h-12 w-full rounded-xl border border-line bg-mist/60 px-3.5 text-sm outline-none transition focus:border-brand focus:bg-white focus:ring-4 focus:ring-brand/15";
 
@@ -14,24 +14,23 @@ export function ForgotPassword({ onBack }: { onBack: () => void }) {
   const [busy, setBusy] = useState(false);
   const [sent, setSent] = useState(false);
   const [demoToken, setDemoToken] = useState<string | null>(null);
+  const [message, setMessage] = useState("If that email belongs to an active staff account, a reset link is on its way. It expires in 1 hour.");
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!/^\S+@\S+\.\S+$/.test(email.trim())) return;
     setBusy(true);
-    const [token] = await Promise.all([requestPasswordReset(email), new Promise((r) => window.setTimeout(r, 700))]);
-    if (token) {
-      sendNotice({
-        audience: "staff",
-        channel: "email",
-        to: email.trim().toLowerCase(),
-        subject: "Reset your AI Project Connect password",
-        body: `Choose a new password here (expires in 1 hour, works once):\n/engineering?reset=${token}\n\nIf this wasn't you, ignore this email.`,
-      });
+    try {
+      const res = await requestPasswordReset(email);
+      setMessage(res.message);
+      setDemoToken(res.devToken ?? null);
+      setSent(true);
+    } catch (err) {
+      setMessage(errorMessage(err));
+      setSent(true);
+    } finally {
+      setBusy(false);
     }
-    setDemoToken(token);
-    setBusy(false);
-    setSent(true);
   };
 
   return (
@@ -47,7 +46,7 @@ export function ForgotPassword({ onBack }: { onBack: () => void }) {
         <>
           <p className="mt-3 flex items-start gap-2 rounded-xl bg-teal-soft px-4 py-3 text-sm text-teal-700">
             <Mail className="mt-0.5 size-4 shrink-0" />
-            If that email belongs to an active staff account, a reset link is on its way. It expires in 1 hour.
+            {message}
           </p>
           {demoToken && (
             <a href={`/engineering?reset=${demoToken}`} className="mt-4 flex h-11 items-center justify-center rounded-xl border border-dashed border-brand/50 text-sm font-bold text-brand-700 hover:bg-brand-soft/40">
@@ -73,36 +72,34 @@ export function ForgotPassword({ onBack }: { onBack: () => void }) {
 
 /** Opened from the emailed link: /engineering?reset=TOKEN */
 export function ResetPassword({ token, onDone }: { token: string; onDone: () => void }) {
-  const [state, setState] = useState<"checking" | "invalid" | "form" | "done">("checking");
-  const [email, setEmail] = useState("");
+  // The server checks the token when the new password is sent, so the form shows straight away.
+  const [state, setState] = useState<"invalid" | "form" | "done">("form");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    findValidReset(token).then((found) => {
-      if (!found) return setState("invalid");
-      setEmail(found.user.email);
-      setState("form");
-    });
-  }, [token]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (password.length < 10) return setError("Use at least 10 characters.");
     if (password !== confirm) return setError("The passwords don't match.");
     setBusy(true);
-    const user = await resetPasswordWithToken(token, password);
-    setBusy(false);
-    if (!user) return setState("invalid");
-    sendNotice({ audience: "staff", channel: "email", to: user.email, subject: "Your password was changed", body: `Hi ${user.name},\n\nThe password for your staff account was just changed. If this wasn't you, contact an admin immediately.` });
-    setState("done");
+    setError("");
+    try {
+      await resetPasswordWithToken(token, password);
+      setState("done");
+    } catch (err) {
+      const message = errorMessage(err);
+      // An expired or already-used link can't be fixed by trying again.
+      if (/link|token|expired|used/i.test(message)) setState("invalid");
+      else setError(message);
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
     <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }}>
-      {state === "checking" && <Loader2 className="mx-auto size-8 animate-spin text-brand" />}
       {state === "invalid" && (
         <>
           <ShieldAlert className="size-10 text-danger" />
@@ -129,7 +126,7 @@ export function ResetPassword({ token, onDone }: { token: string; onDone: () => 
             <KeyRound className="size-6 text-brand-700" />
           </span>
           <h2 className="font-display text-3xl font-bold">Choose a new password</h2>
-          <p className="text-sm text-muted">For {email}</p>
+          <p className="text-sm text-muted">Choose something only you know. The link works once.</p>
           <label className="block">
             <span className="mb-1.5 block text-sm font-bold">New password</span>
             <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" autoFocus className={inputClass} />

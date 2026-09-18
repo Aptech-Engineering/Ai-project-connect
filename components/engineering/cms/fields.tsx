@@ -4,9 +4,18 @@ import { useId, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { ArrowDown, ArrowUp, ImagePlus, Loader2, Plus, Trash2, X } from "lucide-react";
 import StoredImage from "../../StoredImage";
-import { saveFile, validateImage } from "@/lib/files";
+import { api, errorMessage, formData } from "@/lib/api";
+import { validateImage } from "@/lib/files";
 import { cn } from "@/lib/format";
 import type { LinkItem } from "@/lib/content";
+
+/**
+ * Uploads a picture to the server and returns the id to store in the content
+ * document or on a course. Nothing is kept in the browser.
+ */
+export async function uploadImage(file: File) {
+  return api.post<{ id: string; url: string; name?: string; size?: number }>("/admin/images", formData({ file }));
+}
 
 export const inputClass =
   "w-full rounded-xl border border-line bg-white px-3.5 text-sm text-navy outline-none transition placeholder:text-muted/70 focus:border-brand focus:ring-4 focus:ring-brand/15";
@@ -190,7 +199,7 @@ export function ImagePicker({ label, value, onChange, hint }: { label: string; v
   const [error, setError] = useState("");
 
   const pick = async (file?: File) => {
-    if (!file) return;
+    if (!file || busy) return;
     const problem = validateImage(file);
     if (problem) {
       setError(problem);
@@ -199,23 +208,23 @@ export function ImagePicker({ label, value, onChange, hint }: { label: string; v
     setError("");
     setBusy(true);
     try {
-      const meta = await saveFile(file);
-      onChange(meta.id);
-    } catch {
-      setError("Upload failed. Please try again.");
+      const stored = await uploadImage(file);
+      onChange(stored.id);
+    } catch (e) {
+      setError(errorMessage(e));
     } finally {
       setBusy(false);
     }
   };
 
   return (
-    <Field label={label} hint={hint ?? "PNG, JPG, WebP or GIF · max 5 MB"} id={id}>
+    <Field label={label} hint={hint ?? "JPG, PNG or WebP · max 5 MB. The picture is stored on the server."} id={id}>
       {value ? (
         <div className="relative overflow-hidden rounded-xl border border-line bg-mist">
           <StoredImage id={value} alt={label} className="max-h-64 w-full object-contain" />
           <div className="absolute right-2 top-2 flex gap-1.5">
             <label htmlFor={id} className="cursor-pointer rounded-full bg-white/95 px-3 py-1.5 text-xs font-bold shadow hover:bg-white">
-              Replace
+              {busy ? "Uploading…" : "Replace"}
             </label>
             <button type="button" onClick={() => onChange(undefined)} aria-label="Remove image" className="rounded-full bg-white/95 p-1.5 text-danger shadow hover:bg-white">
               <X className="size-4" />
@@ -239,13 +248,17 @@ export function ImagePicker({ label, value, onChange, hint }: { label: string; v
       <input
         id={id}
         type="file"
-        accept="image/png,image/jpeg,image/webp,image/gif"
+        accept="image/png,image/jpeg,image/webp"
+        disabled={busy}
         className="sr-only"
         onChange={(e) => {
-          pick(e.target.files?.[0]);
+          void pick(e.target.files?.[0]);
           e.target.value = "";
         }}
       />
+      <p aria-live="polite" className="sr-only">
+        {busy ? "Uploading the image…" : error ? error : value ? "Image uploaded." : ""}
+      </p>
       {error && <p className="mt-1 text-xs font-bold text-danger">{error}</p>}
     </Field>
   );

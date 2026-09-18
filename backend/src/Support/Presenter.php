@@ -32,7 +32,8 @@ final class Presenter
     public static function maskEmail(string $email): string
     {
         [$local, $domain] = array_pad(explode('@', $email, 2), 2, '');
-        return mb_substr($local, 0, 1) . '•••@' . $domain;
+        // Escapes, not literals: an editor that re-saves this file in another encoding cannot corrupt them.
+        return mb_substr($local, 0, 1) . "\u{2022}\u{2022}\u{2022}@" . $domain;
     }
 
     public static function maskPhone(?string $phone): string
@@ -42,7 +43,7 @@ final class Presenter
             return '';
         }
         $prefix = str_starts_with($digits, '0') ? substr($digits, 0, 4) : '+' . substr($digits, 0, 3);
-        return $prefix . ' ••• ••• ' . substr($digits, -4);
+        return $prefix . " \u{2022}\u{2022}\u{2022} \u{2022}\u{2022}\u{2022} " . substr($digits, -4);
     }
 
     public static function shortName(string $name): string

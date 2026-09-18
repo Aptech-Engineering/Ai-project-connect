@@ -2,10 +2,10 @@
 
 import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Check, CheckCircle2, ClipboardCheck, FilePlus2, Mail, PenLine, ShieldCheck, Wallet as WalletIcon } from "lucide-react";
-import { useIdeas } from "@/lib/ideas";
-import WalletLedger from "../wallet/WalletLedger";
+import { Check, CheckCircle2, ClipboardCheck, FilePlus2, Loader2, Mail, PenLine, ShieldCheck, Wallet as WalletIcon } from "lucide-react";
+import WalletLedger, { type WalletEntry } from "../wallet/WalletLedger";
 import { CHANGE_STATUS, clientRequestChange, clientRespondChange, clientSignHandover, impactText, setDigestOptOut } from "@/lib/flows";
+import { errorMessage } from "@/lib/api";
 import { formatPrice } from "@/lib/catalog";
 import { useSiteContent } from "@/lib/content";
 import { cn, formatDate, relativeDay } from "@/lib/format";
@@ -23,9 +23,44 @@ export function ChangeRequestsPanel({ project, notify }: { project: Project; not
   const [description, setDescription] = useState("");
   const [declining, setDeclining] = useState<string | null>(null);
   const [note, setNote] = useState("");
+  const [busy, setBusy] = useState<string | null>(null);
+  const [sending, setSending] = useState(false);
   const requests = project.changeRequests ?? [];
   const waiting = requests.filter((r) => r.status === "QUOTED").length;
   const locked = project.stage === "DELIVERED";
+
+  const respond = async (crId: string, decision: "approve" | "decline", extraDays?: number, reason?: string) => {
+    setBusy(crId);
+    try {
+      await clientRespondChange(crId, decision, reason);
+      if (decision === "decline") {
+        setDeclining(null);
+        setNote("");
+        notify("Change declined. Your team has been told.", "info");
+      } else {
+        notify(extraDays && extraDays > 0 ? `Approved. Your delivery date moves by ${extraDays} days.` : "Approved. Your team will start on it.");
+      }
+    } catch (e) {
+      notify(errorMessage(e), "info");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const raise = async () => {
+    setSending(true);
+    try {
+      await clientRequestChange(project.code, title.trim(), description.trim());
+      setTitle("");
+      setDescription("");
+      setOpen(false);
+      notify(`Change request sent to ${project.lead.name}. You'll get the cost and time impact before anything changes.`);
+    } catch (e) {
+      notify(errorMessage(e), "info");
+    } finally {
+      setSending(false);
+    }
+  };
 
   return (
     <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }} className={card}>
@@ -67,33 +102,32 @@ export function ChangeRequestsPanel({ project, notify }: { project: Project; not
                     className="mt-3 space-y-2 overflow-hidden"
                     onSubmit={(e) => {
                       e.preventDefault();
-                      clientRespondChange(project, cr, "decline", note.trim() || undefined);
-                      setDeclining(null);
-                      setNote("");
-                      notify("Change declined. Your team has been told.", "info");
+                      if (busy) return;
+                      void respond(cr.id, "decline", undefined, note.trim() || undefined);
                     }}
                   >
-                    <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Optional: tell us why" className={cn(inputClass, "h-10")} />
+                    <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Optional: tell us why" aria-label="Why you're declining" className={cn(inputClass, "h-10")} />
                     <div className="flex gap-2">
-                      <button type="button" onClick={() => setDeclining(null)} className="h-10 flex-1 rounded-xl border border-line text-sm font-bold text-muted">
+                      <button type="button" onClick={() => setDeclining(null)} disabled={busy === cr.id} className="h-10 flex-1 rounded-xl border border-line text-sm font-bold text-muted disabled:opacity-50">
                         Back
                       </button>
-                      <button className="h-10 flex-1 rounded-xl bg-navy text-sm font-bold text-white">Decline change</button>
+                      <button disabled={busy === cr.id} className="flex h-10 flex-1 items-center justify-center gap-2 rounded-xl bg-navy text-sm font-bold text-white disabled:opacity-50">
+                        {busy === cr.id && <Loader2 className="size-4 animate-spin" />}
+                        Decline change
+                      </button>
                     </div>
                   </motion.form>
                 ) : (
                   <motion.div key="actions" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="mt-3 grid grid-cols-2 gap-2">
-                    <button onClick={() => setDeclining(cr.id)} className="h-10 rounded-xl border border-line bg-white text-sm font-bold text-muted hover:text-navy">
+                    <button onClick={() => setDeclining(cr.id)} disabled={busy !== null} className="h-10 rounded-xl border border-line bg-white text-sm font-bold text-muted hover:text-navy disabled:opacity-50">
                       Decline
                     </button>
                     <button
-                      onClick={() => {
-                        clientRespondChange(project, cr, "approve");
-                        notify(cr.impactDays && cr.impactDays > 0 ? `Approved. Your delivery date moves by ${cr.impactDays} days.` : "Approved. Your team will start on it.");
-                      }}
-                      className="flex h-10 items-center justify-center gap-1.5 rounded-xl bg-brand text-sm font-bold text-white hover:bg-brand-600"
+                      onClick={() => void respond(cr.id, "approve", cr.impactDays)}
+                      disabled={busy !== null}
+                      className="flex h-10 items-center justify-center gap-1.5 rounded-xl bg-brand text-sm font-bold text-white hover:bg-brand-600 disabled:opacity-50"
                     >
-                      <Check className="size-4" /> Approve
+                      {busy === cr.id ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />} Approve
                     </button>
                   </motion.div>
                 )}
@@ -115,22 +149,22 @@ export function ChangeRequestsPanel({ project, notify }: { project: Project; not
               className="mt-4 space-y-2 overflow-hidden rounded-2xl bg-mist p-4"
               onSubmit={(e) => {
                 e.preventDefault();
-                if (title.trim().length < 3 || description.trim().length < 10) return;
-                clientRequestChange(project, title.trim(), description.trim());
-                setTitle("");
-                setDescription("");
-                setOpen(false);
-                notify(`Change request sent to ${project.lead.name}. You'll get the cost and time impact before anything changes.`);
+                if (title.trim().length < 3 || description.trim().length < 10 || sending) return;
+                void raise();
               }}
             >
               <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="What should change? e.g. Add pay on delivery" className={cn(inputClass, "h-11")} aria-label="Change title" />
               <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={3} placeholder="Describe it in your own words" className={cn(inputClass, "resize-none py-2.5")} aria-label="Change description" />
               <div className="flex gap-2">
-                <button type="button" onClick={() => setOpen(false)} className="h-10 flex-1 rounded-xl border border-line bg-white text-sm font-bold text-muted">
+                <button type="button" onClick={() => setOpen(false)} disabled={sending} className="h-10 flex-1 rounded-xl border border-line bg-white text-sm font-bold text-muted disabled:opacity-50">
                   Cancel
                 </button>
-                <button disabled={title.trim().length < 3 || description.trim().length < 10} className="h-10 flex-1 rounded-xl bg-navy text-sm font-bold text-white disabled:opacity-40">
-                  Send request
+                <button
+                  disabled={title.trim().length < 3 || description.trim().length < 10 || sending}
+                  className="flex h-10 flex-1 items-center justify-center gap-2 rounded-xl bg-navy text-sm font-bold text-white disabled:opacity-40"
+                >
+                  {sending && <Loader2 className="size-4 animate-spin" />}
+                  {sending ? "Sending…" : "Send request"}
                 </button>
               </div>
             </motion.form>
@@ -159,7 +193,22 @@ export function HandoverPanel({ project, notify }: { project: Project; notify: N
   const [plan, setPlan] = useState(supportPlans.plans[1]?.id ?? supportPlans.plans[0]?.id ?? "");
   const [name, setName] = useState("");
   const [agree, setAgree] = useState(false);
+  const [signing, setSigning] = useState(false);
+  const [error, setError] = useState("");
   if (!handover || (!handover.requestedAt && handover.items.length === 0)) return null;
+
+  const sign = async () => {
+    setSigning(true);
+    setError("");
+    try {
+      await clientSignHandover(project.code, name.trim(), plan);
+      notify("Handover signed. Congratulations on your new product!");
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setSigning(false);
+    }
+  };
 
   const done = handover.items.filter((i) => i.doneAt).length;
   const signedPlan = supportPlans.plans.find((p) => p.id === handover.supportPlan);
@@ -203,9 +252,8 @@ export function HandoverPanel({ project, notify }: { project: Project; notify: N
           className="mt-6 space-y-4 border-t border-line pt-5"
           onSubmit={(e) => {
             e.preventDefault();
-            if (name.trim().length < 2 || !agree || !plan) return;
-            clientSignHandover(project, name.trim(), plan);
-            notify("Handover signed. Congratulations on your new product!");
+            if (name.trim().length < 2 || !agree || !plan || signing) return;
+            void sign();
           }}
         >
           <div>
@@ -242,10 +290,14 @@ export function HandoverPanel({ project, notify }: { project: Project; notify: N
             I confirm I've received everything on the checklist and accept the product as delivered.
           </label>
           <div className="flex flex-col gap-2 sm:flex-row">
-            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Type your full name to sign" aria-label="Your full name" className={cn(inputClass, "h-11 flex-1")} />
-            <button disabled={name.trim().length < 2 || !agree} className="flex h-11 items-center justify-center gap-2 rounded-xl bg-teal px-5 text-sm font-bold text-white hover:bg-teal-700 disabled:opacity-40">
-              <ShieldCheck className="size-4" /> Sign off handover
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Type your full name to sign" aria-label="Your full name" disabled={signing} className={cn(inputClass, "h-11 flex-1 disabled:opacity-60")} />
+            <button disabled={name.trim().length < 2 || !agree || signing} className="flex h-11 items-center justify-center gap-2 rounded-xl bg-teal px-5 text-sm font-bold text-white hover:bg-teal-700 disabled:opacity-40">
+              {signing ? <Loader2 className="size-4 animate-spin" /> : <ShieldCheck className="size-4" />}
+              {signing ? "Signing…" : "Sign off handover"}
             </button>
+          </div>
+          <div aria-live="polite" className="min-h-0">
+            {error && <p className="text-sm font-bold text-danger">{error}</p>}
           </div>
         </form>
       ) : null}
@@ -256,7 +308,21 @@ export function HandoverPanel({ project, notify }: { project: Project; notify: N
 /* ---------------- weekly email preference ---------------- */
 
 export function EmailPreferences({ project, notify }: { project: Project; notify: Notify }) {
+  const [saving, setSaving] = useState(false);
   const on = !project.digestOptOut;
+
+  const toggle = async () => {
+    setSaving(true);
+    try {
+      await setDigestOptOut(project.code, on);
+      notify(on ? "Weekly emails turned off." : "Weekly emails turned on.", "info");
+    } catch (e) {
+      notify(errorMessage(e), "info");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.5 }} className="flex items-center justify-between gap-4 rounded-3xl border border-line bg-white p-5 shadow-sm">
       <div className="flex items-start gap-3">
@@ -274,11 +340,9 @@ export function EmailPreferences({ project, notify }: { project: Project; notify
         role="switch"
         aria-checked={on}
         aria-labelledby="digest-label"
-        onClick={() => {
-          setDigestOptOut(project, on);
-          notify(on ? "Weekly emails turned off." : "Weekly emails turned on.", "info");
-        }}
-        className={cn("relative h-6 w-11 shrink-0 rounded-full transition", on ? "bg-teal" : "bg-line")}
+        disabled={saving}
+        onClick={() => void toggle()}
+        className={cn("relative h-6 w-11 shrink-0 rounded-full transition disabled:opacity-60", on ? "bg-teal" : "bg-line")}
       >
         <motion.span layout transition={{ type: "spring", stiffness: 500, damping: 30 }} className={cn("absolute top-1 size-4 rounded-full bg-white shadow", on ? "right-1" : "left-1")} />
       </button>
@@ -286,17 +350,28 @@ export function EmailPreferences({ project, notify }: { project: Project; notify
   );
 }
 
+/**
+ * The commitment fee ledger the API sends on the project. It is null for projects
+ * registered directly rather than from a paid application, and the panel hides itself then.
+ *
+ * `wallet` isn't on the shared Project type yet, so it is read through a narrowed
+ * structural view rather than a cast to `any`.
+ */
+function projectWallet(project: Project): WalletEntry[] {
+  return (project as Project & { wallet?: WalletEntry[] | null }).wallet ?? [];
+}
+
 /** Wallet transactions (commitment fee and any refund) from the idea this project came from. */
 export function WalletPanel({ project }: { project: Project }) {
-  const idea = useIdeas().find((i) => i.projectCode === project.code);
-  if (!idea?.payments?.length) return null;
+  const entries = projectWallet(project);
+  if (entries.length === 0) return null;
   return (
     <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className={card}>
       <h4 className="flex items-center gap-2 font-display text-lg font-bold">
         <WalletIcon className="size-5 text-brand" /> Project wallet
       </h4>
-      <p className="mb-4 mt-1 text-sm text-muted">Payments linked to {idea.ref}.</p>
-      <WalletLedger idea={idea} />
+      <p className="mb-4 mt-1 text-sm text-muted">The commitment fee you paid for this project, and anything refunded.</p>
+      <WalletLedger entries={entries} />
     </motion.div>
   );
 }

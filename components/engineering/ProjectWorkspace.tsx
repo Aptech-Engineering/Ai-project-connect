@@ -7,7 +7,9 @@ import {
   Download,
   FileText,
   KeyRound,
+  Loader2,
   RefreshCw,
+  RotateCw,
   Star,
   Upload,
   UserPlus,
@@ -28,46 +30,101 @@ import {
   X,
 } from "lucide-react";
 import StageBadge from "../status/StageBadge";
-import { STAGES, STAGE_MIN_PROGRESS, isClientVisible, timelineStep } from "@/lib/data";
+import { STAGES, STAGE_MIN_PROGRESS, isClientVisible } from "@/lib/data";
 import { activeLeads, activeTeamMembers, canLeadProject, personOf, useStaff, useStaffUsers } from "@/lib/staff";
 import { useCatalog } from "@/lib/catalog";
 import { useSiteContent } from "@/lib/content";
-import { announceStage, announceUpdate, assignMember, changeLead, postTeamReply, regenerateProjectCode, removeFile, removeMember, shareFile } from "@/lib/actions";
+import { errorMessage } from "@/lib/api";
+import {
+  addMilestone,
+  addTechnology,
+  approveUpdate,
+  assignMember,
+  changeLead,
+  changeStage,
+  deleteUpdate,
+  postTeamReply,
+  postUpdate,
+  regenerateProjectCode,
+  removeFile,
+  removeMember,
+  removeTechnology,
+  shareFile,
+  updateMilestone,
+} from "@/lib/actions";
+import { useStaffProject } from "@/lib/store";
 import MessageThread from "../MessageThread";
 import { ChangeRequestsEditor, DigestPreviewButton, HandoverEditor } from "./ProjectExtras";
-import { MAX_PDF_BYTES, formatBytes, saveFile } from "@/lib/files";
-import { updateProject, uid, withActivity } from "@/lib/store";
+import { MAX_PDF_BYTES, openRemoteFile } from "@/lib/files";
 import { cn, daysFromNow, formatDate, initials, relativeDay, shortDate } from "@/lib/format";
 import type { Project, SharedFile, StageKey, Update } from "@/lib/types";
 import type { Notify } from "../PortalApp";
-import { actingAs, daysSinceClientUpdate, isStale, type StaffRole } from "./helpers";
+import { apiPath, daysSinceClientUpdate, isStale } from "./helpers";
 
 const card = "rounded-2xl border border-line bg-white p-5 shadow-sm sm:p-6";
 const input =
   "w-full rounded-xl border border-line bg-white px-3.5 text-sm outline-none transition focus:border-brand focus:ring-4 focus:ring-brand/15";
 
+/** Project files carry the API path they can be downloaded from. */
+type ProjectFile = SharedFile & { url?: string };
+
 export default function ProjectWorkspace({
-  project,
-  role,
+  code,
   onBack,
   onCodeChange,
   notify,
 }: {
-  project: Project;
-  role: StaffRole;
+  code: string;
   onBack: () => void;
   onCodeChange: (code: string) => void;
   notify: Notify;
 }) {
+  const { data: project, loading, error, refresh } = useStaffProject(code);
+
+  if (!project) {
+    return (
+      <div>
+        <BackLink onBack={onBack} />
+        <div className="mt-4" aria-live="polite" aria-busy={loading}>
+          {error ? (
+            <div role="alert" className="flex flex-col items-center gap-3 rounded-2xl border border-danger/20 bg-danger-soft px-4 py-12 text-center">
+              <AlertTriangle className="size-6 text-danger" />
+              <p className="text-sm">{error}</p>
+              <button onClick={() => void refresh()} className="flex items-center gap-1.5 rounded-full border border-line bg-white px-4 py-2 text-sm font-bold text-navy hover:border-navy/30">
+                <RotateCw className="size-4" /> Try again
+              </button>
+            </div>
+          ) : (
+            <div className="grid place-items-center rounded-2xl border border-line bg-white py-24 shadow-sm">
+              <Loader2 className="size-7 animate-spin text-brand" />
+              <p className="mt-3 text-sm text-muted">Loading this project…</p>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return <Workspace project={project} onBack={onBack} onCodeChange={onCodeChange} notify={notify} />;
+}
+
+function BackLink({ onBack }: { onBack: () => void }) {
+  return (
+    <button onClick={onBack} className="flex items-center gap-1.5 text-sm font-bold text-muted transition hover:text-navy">
+      <ArrowLeft className="size-4" /> All projects
+    </button>
+  );
+}
+
+function Workspace({ project, onBack, onCodeChange, notify }: { project: Project; onBack: () => void; onCodeChange: (code: string) => void; notify: Notify }) {
   const me = useStaff();
   const stale = isStale(project);
   const days = daysSinceClientUpdate(project);
+  const [replying, setReplying] = useState(false);
 
   return (
     <div>
-      <button onClick={onBack} className="flex items-center gap-1.5 text-sm font-bold text-muted transition hover:text-navy">
-        <ArrowLeft className="size-4" /> All projects
-      </button>
+      <BackLink onBack={onBack} />
 
       {/* header */}
       <div className="mt-4 overflow-hidden rounded-2xl border border-line bg-white shadow-sm">
@@ -79,7 +136,8 @@ export default function ProjectWorkspace({
               <StageBadge stage={project.stage} />
             </div>
             <p className="mt-1 text-sm text-muted">
-              {project.client.name} · {project.platforms} · Target {formatDate(project.targetDate)} ({daysFromNow(project.targetDate)} days)
+              {project.client.name} · {project.platforms}
+              {project.targetDate ? ` · Target ${formatDate(project.targetDate)} (${daysFromNow(project.targetDate)} days)` : " · No target date yet"}
             </p>
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <button
@@ -124,34 +182,45 @@ export default function ProjectWorkspace({
 
       <div className="mt-5 grid gap-5 lg:grid-cols-[1fr_380px]">
         <div className="flex min-w-0 flex-col gap-5">
-          <Composer project={project} role={role} notify={notify} />
-          <UpdatesList project={project} role={role} notify={notify} />
+          <Composer project={project} notify={notify} />
+          <UpdatesList project={project} notify={notify} />
           <MessageThread
             className={card}
             messages={project.messages ?? []}
             viewer="team"
             title="Client messages"
-            subtitle={`Conversation with ${project.client.name}. Replies are emailed to the client.`}
+            subtitle={replying ? "Sending your reply…" : `Conversation with ${project.client.name}. Replies are emailed to the client.`}
             placeholder="Reply in plain language…"
             onSend={(text) => {
-              postTeamReply(project, actingAs(me), text);
-              notify(`Reply sent to ${project.client.name}.`);
+              if (replying) return;
+              setReplying(true);
+              postTeamReply(project.code, text)
+                .then(() => notify(`Reply sent to ${project.client.name}.`))
+                .catch((e) => notify(errorMessage(e), "info"))
+                .finally(() => setReplying(false));
             }}
           />
-          <FilesEditor project={project} role={role} notify={notify} />
+          <FilesEditor project={project} notify={notify} />
           <ChangeRequestsEditor project={project} notify={notify} />
         </div>
         <div className="flex min-w-0 flex-col gap-5">
-          <StageControl project={project} role={role} notify={notify} />
+          <StageControl project={project} notify={notify} />
           <HandoverEditor project={project} notify={notify} />
-          <StackEditor project={project} role={role} notify={notify} />
-          <MilestoneEditor project={project} role={role} notify={notify} />
-          <ProjectIdCard project={project} role={role} notify={notify} onCodeChange={onCodeChange} />
-          <Team project={project} role={role} notify={notify} />
+          <StackEditor project={project} notify={notify} />
+          <MilestoneEditor project={project} notify={notify} />
+          <ProjectIdCard project={project} notify={notify} onCodeChange={onCodeChange} />
+          <Team project={project} notify={notify} />
           {project.rating && <RatingCard rating={project.rating} client={project.client.name} />}
           <ActivityLog project={project} />
         </div>
       </div>
+      <p className="mt-5 text-center text-xs text-muted">
+        {me.role === "admin"
+          ? "As an admin you can change anything on this project."
+          : canLeadProject(me, project)
+            ? "As the project lead you can change the stage, approve updates and manage the team."
+            : "As an engineer you can post updates, tag the stack, share files and reply to the client. Client updates go to your lead first."}
+      </p>
     </div>
   );
 }
@@ -163,9 +232,10 @@ const TEMPLATES = [
   { label: "Fixes shipped", title: "Improvements and fixes", body: "We fixed [number] small issues found during testing, including [example]. The app is now faster and more reliable." },
 ];
 
+/** The four preview pictures the server can attach to an update. */
 const SCREENSHOTS: NonNullable<Update["screenshot"]>[] = ["design", "onboarding", "payment", "dashboard"];
 
-function Composer({ project, role, notify }: { project: Project; role: StaffRole; notify: Notify }) {
+function Composer({ project, notify }: { project: Project; notify: Notify }) {
   const me = useStaff();
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
@@ -173,46 +243,42 @@ function Composer({ project, role, notify }: { project: Project; role: StaffRole
   const [demoLink, setDemoLink] = useState("");
   const [screenshot, setScreenshot] = useState<Update["screenshot"]>();
   const [extras, setExtras] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
 
-  const needsApproval = role === "engineer" && visibility === "client";
+  const needsApproval = me.role === "engineer" && visibility === "client";
   const valid = title.trim().length > 2 && body.trim().length > 5 && (!demoLink || /^https?:\/\/\S+\.\S+/.test(demoLink));
 
-  const submit = (e: React.FormEvent) => {
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!valid) return;
-    const author = actingAs(me);
-    const update: Update = {
-      id: uid(),
-      date: new Date().toISOString(),
-      kind: "update",
-      author,
-      title: title.trim(),
-      body: body.trim(),
-      visibility,
-      pending: needsApproval || undefined,
-      demoLink: demoLink.trim() || undefined,
-      screenshot: visibility === "client" ? screenshot : undefined,
-    };
-    updateProject(project.code, (p) =>
-      withActivity(
-        { ...p, updates: [update, ...p.updates] },
-        author,
-        visibility === "internal" ? `Added internal note "${update.title}"` : needsApproval ? `Submitted "${update.title}" for approval` : `Published "${update.title}"`,
-      ),
-    );
-    if (visibility === "client" && !needsApproval) announceUpdate(project, update);
-    notify(
-      visibility === "internal"
-        ? "Internal note saved. Clients can't see it."
-        : needsApproval
-          ? "Sent to the project lead for approval."
-          : `Published. ${project.client.name} has been notified by email and SMS.`,
-    );
-    setTitle("");
-    setBody("");
-    setDemoLink("");
-    setScreenshot(undefined);
-    setExtras(false);
+    if (!valid || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      await postUpdate(project.code, {
+        title: title.trim(),
+        body: body.trim(),
+        visibility,
+        demoLink: demoLink.trim() || undefined,
+        screenshot: visibility === "client" ? screenshot : undefined,
+      });
+      notify(
+        visibility === "internal"
+          ? "Internal note saved. Clients can't see it."
+          : needsApproval
+            ? "Sent to the project lead for approval."
+            : `Published. ${project.client.name} has been notified by email and SMS.`,
+      );
+      setTitle("");
+      setBody("");
+      setDemoLink("");
+      setScreenshot(undefined);
+      setExtras(false);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -244,73 +310,77 @@ function Composer({ project, role, notify }: { project: Project; role: StaffRole
         </div>
       </div>
 
-      <div className="mt-4 flex flex-wrap gap-2">
-        <span className="py-1 text-xs text-muted">Quick templates:</span>
-        {TEMPLATES.map((t) => (
-          <button
-            key={t.label}
-            type="button"
-            onClick={() => {
-              setTitle(t.title);
-              setBody(t.body);
-            }}
-            className="rounded-full border border-line px-2.5 py-1 text-xs font-bold text-muted transition hover:border-brand hover:text-brand-700"
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
+      <fieldset disabled={busy} className={cn(busy && "opacity-70")}>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <span className="py-1 text-xs text-muted">Quick templates:</span>
+          {TEMPLATES.map((t) => (
+            <button
+              key={t.label}
+              type="button"
+              onClick={() => {
+                setTitle(t.title);
+                setBody(t.body);
+              }}
+              className="rounded-full border border-line px-2.5 py-1 text-xs font-bold text-muted transition hover:border-brand hover:text-brand-700"
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
 
-      <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Headline, e.g. Checkout screens are ready" className={cn(input, "mt-4 h-11 font-bold")} maxLength={90} />
-      <textarea
-        value={body}
-        onChange={(e) => setBody(e.target.value)}
-        rows={4}
-        placeholder={visibility === "client" ? "Explain what changed and why it matters to the client, in plain language." : "Technical notes for the team. Never shown to the client."}
-        className={cn(input, "mt-2 resize-y py-3 leading-relaxed")}
-      />
-      {visibility === "client" && (
-        <p className="mt-1.5 text-xs text-muted">
-          Tip: write for a first-time founder. Say &ldquo;where your app stores its data&rdquo;, not &ldquo;PostgreSQL migration&rdquo;.
-        </p>
-      )}
-
-      <AnimatePresence initial={false}>
-        {extras && (
-          <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden">
-            <div className="mt-3 space-y-3 rounded-xl bg-mist p-3">
-              <div className="flex h-10 items-center gap-2 rounded-lg border border-line bg-white px-3">
-                <Link2 className="size-4 text-muted" />
-                <input value={demoLink} onChange={(e) => setDemoLink(e.target.value)} placeholder="Staging / demo link (https://…)" className="w-full bg-transparent text-sm outline-none" />
-              </div>
-              {visibility === "client" && (
-                <div>
-                  <p className="text-xs font-bold text-muted">Attach a screenshot (mock)</p>
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    {SCREENSHOTS.map((s) => (
-                      <button
-                        key={s}
-                        type="button"
-                        onClick={() => setScreenshot(screenshot === s ? undefined : s)}
-                        className={cn(
-                          "rounded-lg border px-3 py-1.5 text-xs font-bold capitalize transition",
-                          screenshot === s ? "border-brand bg-brand text-white" : "border-line bg-white text-muted hover:border-brand",
-                        )}
-                      >
-                        {s}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          </motion.div>
+        <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Headline, e.g. Checkout screens are ready" aria-label="Update headline" className={cn(input, "mt-4 h-11 font-bold")} maxLength={90} />
+        <textarea
+          value={body}
+          onChange={(e) => setBody(e.target.value)}
+          rows={4}
+          aria-label="Update details"
+          placeholder={visibility === "client" ? "Explain what changed and why it matters to the client, in plain language." : "Technical notes for the team. Never shown to the client."}
+          className={cn(input, "mt-2 resize-y py-3 leading-relaxed")}
+        />
+        {visibility === "client" && (
+          <p className="mt-1.5 text-xs text-muted">
+            Tip: write for a first-time founder. Say &ldquo;where your app stores its data&rdquo;, not &ldquo;PostgreSQL migration&rdquo;.
+          </p>
         )}
-      </AnimatePresence>
+
+        <AnimatePresence initial={false}>
+          {extras && (
+            <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden">
+              <div className="mt-3 space-y-3 rounded-xl bg-mist p-3">
+                <div className="flex h-10 items-center gap-2 rounded-lg border border-line bg-white px-3">
+                  <Link2 className="size-4 text-muted" />
+                  <input value={demoLink} onChange={(e) => setDemoLink(e.target.value)} aria-label="Staging or demo link" placeholder="Staging / demo link (https://…)" className="w-full bg-transparent text-sm outline-none" />
+                </div>
+                {visibility === "client" && (
+                  <div>
+                    <p className="text-xs font-bold text-muted">Attach a preview picture</p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {SCREENSHOTS.map((s) => (
+                        <button
+                          key={s}
+                          type="button"
+                          onClick={() => setScreenshot(screenshot === s ? undefined : s)}
+                          aria-pressed={screenshot === s}
+                          className={cn(
+                            "rounded-lg border px-3 py-1.5 text-xs font-bold capitalize transition",
+                            screenshot === s ? "border-brand bg-brand text-white" : "border-line bg-white text-muted hover:border-brand",
+                          )}
+                        >
+                          {s}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </fieldset>
 
       <div className="mt-4 flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-between">
         <button type="button" onClick={() => setExtras((x) => !x)} className="flex items-center gap-1.5 text-sm font-bold text-muted hover:text-navy">
-          {extras ? <X className="size-4" /> : <ImagePlus className="size-4" />} {extras ? "Hide attachments" : "Add link or screenshot"}
+          {extras ? <X className="size-4" /> : <ImagePlus className="size-4" />} {extras ? "Hide attachments" : "Add link or picture"}
         </button>
         <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center">
           {needsApproval && (
@@ -319,26 +389,30 @@ function Composer({ project, role, notify }: { project: Project; role: StaffRole
             </span>
           )}
           <button
-            disabled={!valid}
+            disabled={!valid || busy}
             className={cn(
               "flex h-11 items-center justify-center gap-2 rounded-xl px-5 text-sm font-bold text-white transition disabled:opacity-40",
               visibility === "client" ? "bg-brand hover:bg-brand-600" : "bg-navy hover:bg-navy-700",
             )}
           >
-            <Send className="size-4" />
+            {busy ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
             {visibility === "internal" ? "Save note" : needsApproval ? "Send for approval" : "Publish to client"}
           </button>
         </div>
       </div>
+      <p className="mt-2 text-right text-xs font-bold text-danger" role="alert" aria-live="polite">
+        {error}
+      </p>
     </form>
   );
 }
 
 type Filter = "all" | "client" | "internal" | "pending";
 
-function UpdatesList({ project, role, notify }: { project: Project; role: StaffRole; notify: Notify }) {
+function UpdatesList({ project, notify }: { project: Project; notify: Notify }) {
   const me = useStaff();
   const [filter, setFilter] = useState<Filter>("all");
+  const [busy, setBusy] = useState<string | null>(null);
   const counts: Record<Filter, number> = {
     all: project.updates.length,
     client: project.updates.filter(isClientVisible).length,
@@ -349,17 +423,28 @@ function UpdatesList({ project, role, notify }: { project: Project; role: StaffR
     filter === "all" ? true : filter === "client" ? isClientVisible(u) : filter === "internal" ? u.visibility === "internal" : u.pending,
   );
 
-  const approve = (u: Update) => {
-    updateProject(project.code, (p) =>
-      withActivity({ ...p, updates: p.updates.map((x) => (x.id === u.id ? { ...x, pending: false, date: new Date().toISOString() } : x)) }, actingAs(me), `Approved and published "${u.title}"`),
-    );
-    announceUpdate(project, u);
-    notify(`Published to ${project.client.name}'s portal.`);
+  const approve = async (u: Update) => {
+    setBusy(String(u.id));
+    try {
+      await approveUpdate(u.id);
+      notify(`Published to ${project.client.name}'s portal.`);
+    } catch (e) {
+      notify(errorMessage(e), "info");
+    } finally {
+      setBusy(null);
+    }
   };
 
-  const remove = (u: Update) => {
-    updateProject(project.code, (p) => withActivity({ ...p, updates: p.updates.filter((x) => x.id !== u.id) }, actingAs(me), `${u.pending ? "Rejected" : "Deleted"} "${u.title}"`));
-    notify(u.pending ? "Update sent back to the engineer." : "Update deleted.", "info");
+  const remove = async (u: Update) => {
+    setBusy(String(u.id));
+    try {
+      await deleteUpdate(u.id);
+      notify(u.pending ? "Update sent back to the engineer." : "Update deleted.", "info");
+    } catch (e) {
+      notify(errorMessage(e), "info");
+    } finally {
+      setBusy(null);
+    }
   };
 
   return (
@@ -371,6 +456,7 @@ function UpdatesList({ project, role, notify }: { project: Project; role: StaffR
             <button
               key={f}
               onClick={() => setFilter(f)}
+              aria-pressed={filter === f}
               className={cn(
                 "shrink-0 rounded-full px-3 py-1.5 text-xs font-bold capitalize transition",
                 filter === f ? "bg-navy text-white" : "bg-mist text-muted hover:text-navy",
@@ -394,6 +480,7 @@ function UpdatesList({ project, role, notify }: { project: Project; role: StaffR
               className={cn(
                 "rounded-xl border p-4",
                 u.pending ? "border-brand/30 bg-brand-soft/40" : u.visibility === "internal" ? "border-dashed border-navy/20 bg-mist/60" : "border-line",
+                busy === String(u.id) && "opacity-60",
               )}
             >
               <div className="flex flex-wrap items-center gap-2 text-xs">
@@ -423,7 +510,7 @@ function UpdatesList({ project, role, notify }: { project: Project; role: StaffR
                   )}
                   {u.screenshot && (
                     <span className="flex items-center gap-1 capitalize">
-                      <ImagePlus className="size-3" /> {u.screenshot} screenshot
+                      <ImagePlus className="size-3" /> {u.screenshot} picture
                     </span>
                   )}
                 </p>
@@ -436,16 +523,29 @@ function UpdatesList({ project, role, notify }: { project: Project; role: StaffR
                 <div className="flex gap-2">
                   {u.pending && canLeadProject(me, project) && (
                     <>
-                      <button onClick={() => remove(u)} className="rounded-full border border-line bg-white px-3 py-1.5 text-xs font-bold text-muted hover:text-danger">
+                      <button
+                        disabled={busy === String(u.id)}
+                        onClick={() => void remove(u)}
+                        className="rounded-full border border-line bg-white px-3 py-1.5 text-xs font-bold text-muted hover:text-danger disabled:opacity-40"
+                      >
                         Reject
                       </button>
-                      <button onClick={() => approve(u)} className="flex items-center gap-1 rounded-full bg-teal px-3 py-1.5 text-xs font-bold text-white hover:bg-teal-700">
-                        <CheckCheck className="size-3.5" /> Approve & publish
+                      <button
+                        disabled={busy === String(u.id)}
+                        onClick={() => void approve(u)}
+                        className="flex items-center gap-1 rounded-full bg-teal px-3 py-1.5 text-xs font-bold text-white hover:bg-teal-700 disabled:opacity-40"
+                      >
+                        {busy === String(u.id) ? <Loader2 className="size-3.5 animate-spin" /> : <CheckCheck className="size-3.5" />} Approve &amp; publish
                       </button>
                     </>
                   )}
                   {!u.pending && canLeadProject(me, project) && u.kind !== "stage" && (
-                    <button onClick={() => remove(u)} aria-label="Delete update" className="rounded-full p-1.5 text-muted transition hover:bg-danger-soft hover:text-danger">
+                    <button
+                      disabled={busy === String(u.id)}
+                      onClick={() => void remove(u)}
+                      aria-label="Delete update"
+                      className="rounded-full p-1.5 text-muted transition hover:bg-danger-soft hover:text-danger disabled:opacity-40"
+                    >
                       <Trash2 className="size-4" />
                     </button>
                   )}
@@ -466,51 +566,33 @@ function Tag({ className, children }: { className: string; children: React.React
 
 const STAGE_ORDER: StageKey[] = ["SUBMITTED", "UNDER_REVIEW", "APPROVED", "DESIGN", "DEVELOPMENT", "TESTING", "DEPLOYMENT", "DELIVERED", "ON_HOLD"];
 
-function StageControl({ project, role, notify }: { project: Project; role: StaffRole; notify: Notify }) {
+function StageControl({ project, notify }: { project: Project; notify: Notify }) {
   const me = useStaff();
   const [stage, setStage] = useState<StageKey>(project.stage);
   const [progress, setProgress] = useState(project.progress);
   const [reason, setReason] = useState(project.holdReason ?? "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
   const locked = !canLeadProject(me, project);
   const meanings = useSiteContent().portal.stageMeanings;
   const dirty = stage !== project.stage || progress !== project.progress || (stage === "ON_HOLD" && reason !== (project.holdReason ?? ""));
   const valid = stage !== "ON_HOLD" || reason.trim().length > 8;
 
-  const save = () => {
-    if (!dirty || !valid) return;
-    const author = actingAs(me);
+  const save = async () => {
+    if (!dirty || !valid || busy) return;
+    setBusy(true);
+    setError("");
     const stageChanged = stage !== project.stage;
     const finalProgress = stage === "DELIVERED" ? 100 : progress;
-    updateProject(project.code, (p) => {
-      let next: Project = {
-        ...p,
-        stage,
-        progress: finalProgress,
-        holdReason: stage === "ON_HOLD" ? reason.trim() : undefined,
-        pausedAtStep: stage === "ON_HOLD" ? (p.stage === "ON_HOLD" ? p.pausedAtStep : timelineStep(p)) : undefined,
-        deliveredDate: stage === "DELIVERED" ? (p.deliveredDate ?? new Date().toISOString()) : undefined,
-      };
-      if (stageChanged) {
-        // PRD rule: every stage change automatically posts a client-visible update.
-        next.updates = [
-          {
-            id: uid(),
-            date: new Date().toISOString(),
-            kind: "stage",
-            author,
-            title: stage === "ON_HOLD" ? "Project paused" : `Stage changed to ${STAGES[stage].label}`,
-            body: stage === "ON_HOLD" ? reason.trim() : STAGES[stage].meaning,
-          },
-          ...p.updates,
-        ];
-        next = withActivity(next, author, `Changed stage from ${STAGES[p.stage].label} to ${STAGES[stage].label}`);
-      }
-      if (finalProgress !== p.progress) next = withActivity(next, author, `Set progress from ${p.progress}% to ${finalProgress}%`);
-      return next;
-    });
-    if (stage === "DELIVERED") setProgress(100);
-    if (stageChanged) announceStage(project, stage, stage === "ON_HOLD" ? reason.trim() : undefined);
-    notify(stageChanged ? `Stage updated to ${STAGES[stage].label}. A client-visible update was posted.` : `Progress set to ${finalProgress}%.`);
+    try {
+      await changeStage(project.code, stage, finalProgress, stage === "ON_HOLD" ? reason.trim() : undefined);
+      setProgress(finalProgress);
+      notify(stageChanged ? `Stage updated to ${STAGES[stage].label}. A client-visible update was posted.` : `Progress set to ${finalProgress}%.`);
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -525,7 +607,7 @@ function StageControl({ project, role, notify }: { project: Project; role: Staff
       </div>
       {locked && <p className="mt-1 text-xs text-muted">Only the project lead or admin can change a stage.</p>}
 
-      <fieldset disabled={locked} className={cn("mt-4", locked && "opacity-60")}>
+      <fieldset disabled={locked || busy} className={cn("mt-4", (locked || busy) && "opacity-60")}>
         <legend className="sr-only">Stage</legend>
         <div className="grid grid-cols-3 gap-1.5">
           {STAGE_ORDER.map((s) => (
@@ -597,34 +679,57 @@ function StageControl({ project, role, notify }: { project: Project; role: Staff
 
         <button
           type="button"
-          onClick={save}
-          disabled={!dirty || !valid}
+          onClick={() => void save()}
+          disabled={!dirty || !valid || busy}
           className="mt-4 flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-brand text-sm font-bold text-white transition hover:bg-brand-600 disabled:opacity-40"
         >
-          <Check className="size-4" /> Save changes
+          {busy ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />} Save changes
         </button>
       </fieldset>
+      {error && (
+        <p role="alert" className="mt-2 text-xs font-bold text-danger">
+          {error}
+        </p>
+      )}
     </div>
   );
 }
 
-function StackEditor({ project, role, notify }: { project: Project; role: StaffRole; notify: Notify }) {
-  const me = useStaff();
+function StackEditor({ project, notify }: { project: Project; notify: Notify }) {
   const { technologies, technologyList } = useCatalog();
   const available = technologyList.filter((t) => !project.stack.some((s) => s.techId === t.id));
   const [techId, setTechId] = useState("");
   const [usage, setUsage] = useState("");
-  const author = actingAs(me);
+  const [busy, setBusy] = useState(false);
 
-  const add = (e: React.FormEvent) => {
+  const add = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!techId || !usage.trim()) return;
+    if (!techId || !usage.trim() || busy) return;
     const tech = technologies[techId];
     if (!tech) return;
-    updateProject(project.code, (p) => withActivity({ ...p, stack: [...p.stack, { techId, usage: usage.trim() }] }, author, `Tagged ${tech.name} (${usage.trim()})`));
-    notify(`${tech.name} added. Clients will see it with a "Learn this" course link.`);
-    setTechId("");
-    setUsage("");
+    setBusy(true);
+    try {
+      await addTechnology(project.code, techId, usage.trim());
+      notify(`${tech.name} added. Clients will see it with a "Learn this" course link.`);
+      setTechId("");
+      setUsage("");
+    } catch (err) {
+      notify(errorMessage(err), "info");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const drop = async (id: string, name: string) => {
+    setBusy(true);
+    try {
+      await removeTechnology(project.code, id);
+      notify(`${name} removed from the stack.`, "info");
+    } catch (err) {
+      notify(errorMessage(err), "info");
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -646,12 +751,10 @@ function StackEditor({ project, role, notify }: { project: Project; role: StaffR
                   <span className="block truncate text-xs text-muted">{s.usage}</span>
                 </span>
                 <button
-                  onClick={() => {
-                    updateProject(project.code, (p) => withActivity({ ...p, stack: p.stack.filter((x) => x.techId !== s.techId) }, author, `Removed ${t.name} from stack`));
-                    notify(`${t.name} removed from the stack.`, "info");
-                  }}
+                  disabled={busy}
+                  onClick={() => void drop(s.techId, t.name)}
                   aria-label={`Remove ${t.name}`}
-                  className="rounded-lg p-1.5 text-muted transition hover:bg-white hover:text-danger"
+                  className="rounded-lg p-1.5 text-muted transition hover:bg-white hover:text-danger disabled:opacity-40"
                 >
                   <X className="size-4" />
                 </button>
@@ -662,7 +765,7 @@ function StackEditor({ project, role, notify }: { project: Project; role: StaffR
       </ul>
       {available.length > 0 && (
         <form onSubmit={add} className="mt-3 space-y-2 border-t border-line pt-3">
-          <select value={techId} onChange={(e) => setTechId(e.target.value)} aria-label="Technology" className={cn(input, "h-10")}>
+          <select value={techId} onChange={(e) => setTechId(e.target.value)} disabled={busy} aria-label="Technology" className={cn(input, "h-10")}>
             <option value="">Add technology…</option>
             {available.map((t) => (
               <option key={t.id} value={t.id}>
@@ -673,9 +776,9 @@ function StackEditor({ project, role, notify }: { project: Project; role: StaffR
           <AnimatePresence>
             {techId && (
               <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="flex gap-2 overflow-hidden">
-                <input value={usage} onChange={(e) => setUsage(e.target.value)} placeholder="Used for, e.g. Admin dashboard" className={cn(input, "h-10")} autoFocus />
-                <button disabled={!usage.trim()} className="grid size-10 shrink-0 place-items-center rounded-xl bg-navy text-white disabled:opacity-40" aria-label="Add technology">
-                  <Plus className="size-4" />
+                <input value={usage} onChange={(e) => setUsage(e.target.value)} placeholder="Used for, e.g. Admin dashboard" aria-label="What it is used for" className={cn(input, "h-10")} autoFocus />
+                <button disabled={!usage.trim() || busy} className="grid size-10 shrink-0 place-items-center rounded-xl bg-navy text-white disabled:opacity-40" aria-label="Add technology">
+                  {busy ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />}
                 </button>
               </motion.div>
             )}
@@ -686,44 +789,49 @@ function StackEditor({ project, role, notify }: { project: Project; role: StaffR
   );
 }
 
-function MilestoneEditor({ project, role, notify }: { project: Project; role: StaffRole; notify: Notify }) {
+function MilestoneEditor({ project, notify }: { project: Project; notify: Notify }) {
   const me = useStaff();
   const [adding, setAdding] = useState(false);
   const [title, setTitle] = useState("");
   const [due, setDue] = useState("");
   const [needsApproval, setNeedsApproval] = useState(false);
+  const [busy, setBusy] = useState(false);
   const lead = canLeadProject(me, project);
-  const author = actingAs(me);
   const done = project.milestones.filter((m) => m.completedAt).length;
 
-  const toggle = (id: string) => {
+  const toggle = async (id: string, wasDone: boolean, name: string) => {
     if (!lead) {
       notify("Only the project lead can complete milestones.", "info");
       return;
     }
-    const m = project.milestones.find((x) => x.id === id)!;
-    updateProject(project.code, (p) =>
-      withActivity(
-        { ...p, milestones: p.milestones.map((x) => (x.id === id ? { ...x, completedAt: x.completedAt ? undefined : new Date().toISOString() } : x)) },
-        author,
-        `${m.completedAt ? "Reopened" : "Completed"} milestone "${m.title}"`,
-      ),
-    );
+    if (busy) return;
+    setBusy(true);
+    try {
+      await updateMilestone(id, { completed: !wasDone });
+      notify(`${name} ${wasDone ? "reopened" : "marked done"}.`, "info");
+    } catch (e) {
+      notify(errorMessage(e), "info");
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const add = (e: React.FormEvent) => {
+  const add = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!title.trim() || !due) return;
-    const iso = new Date(`${due}T09:30:00`).toISOString();
-    const milestones = [...project.milestones, { id: uid(), title: title.trim(), due: iso, needsClientApproval: needsApproval || undefined }].sort(
-      (a, b) => +new Date(a.due) - +new Date(b.due),
-    );
-    updateProject(project.code, (p) => withActivity({ ...p, milestones }, author, `Added milestone "${title.trim()}" due ${formatDate(iso)}`));
-    notify("Milestone added.");
-    setTitle("");
-    setDue("");
-    setNeedsApproval(false);
-    setAdding(false);
+    if (!title.trim() || !due || busy) return;
+    setBusy(true);
+    try {
+      await addMilestone(project.code, { title: title.trim(), dueDate: due, needsClientApproval: needsApproval });
+      notify("Milestone added.");
+      setTitle("");
+      setDue("");
+      setNeedsApproval(false);
+      setAdding(false);
+    } catch (err) {
+      notify(errorMessage(err), "info");
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -739,7 +847,11 @@ function MilestoneEditor({ project, role, notify }: { project: Project; role: St
           const overdue = !m.completedAt && daysFromNow(m.due) < 0;
           return (
             <li key={m.id}>
-              <button onClick={() => toggle(m.id)} className="flex w-full items-start gap-3 rounded-xl p-2 text-left transition hover:bg-mist">
+              <button
+                disabled={busy}
+                onClick={() => void toggle(m.id, Boolean(m.completedAt), m.title)}
+                className="flex w-full items-start gap-3 rounded-xl p-2 text-left transition hover:bg-mist disabled:opacity-60"
+              >
                 <motion.span
                   animate={m.completedAt ? { scale: [1, 1.2, 1] } : {}}
                   className={cn("mt-0.5 grid size-5 shrink-0 place-items-center rounded-md border-2", m.completedAt ? "border-teal bg-teal text-white" : "border-line")}
@@ -757,13 +869,14 @@ function MilestoneEditor({ project, role, notify }: { project: Project; role: St
             </li>
           );
         })}
+        {project.milestones.length === 0 && <li className="rounded-xl border border-dashed border-line py-6 text-center text-sm text-muted">No milestones yet.</li>}
       </ul>
 
       {lead && (
         <AnimatePresence mode="wait" initial={false}>
           {adding ? (
             <motion.form key="form" onSubmit={add} initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} className="mt-3 space-y-2 overflow-hidden border-t border-line pt-3">
-              <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Milestone title" className={cn(input, "h-10")} autoFocus />
+              <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Milestone title" aria-label="Milestone title" className={cn(input, "h-10")} autoFocus />
               <input type="date" value={due} onChange={(e) => setDue(e.target.value)} aria-label="Due date" className={cn(input, "h-10")} />
               <label className="flex items-center gap-2 text-sm">
                 <input type="checkbox" checked={needsApproval} onChange={(e) => setNeedsApproval(e.target.checked)} className="size-4 accent-[var(--color-brand)]" />
@@ -773,8 +886,8 @@ function MilestoneEditor({ project, role, notify }: { project: Project; role: St
                 <button type="button" onClick={() => setAdding(false)} className="h-10 flex-1 rounded-xl border border-line text-sm font-bold text-muted">
                   Cancel
                 </button>
-                <button disabled={!title.trim() || !due} className="h-10 flex-1 rounded-xl bg-navy text-sm font-bold text-white disabled:opacity-40">
-                  Add milestone
+                <button disabled={!title.trim() || !due || busy} className="flex h-10 flex-1 items-center justify-center gap-1.5 rounded-xl bg-navy text-sm font-bold text-white disabled:opacity-40">
+                  {busy && <Loader2 className="size-4 animate-spin" />} Add milestone
                 </button>
               </div>
             </motion.form>
@@ -796,14 +909,53 @@ function MilestoneEditor({ project, role, notify }: { project: Project; role: St
   );
 }
 
-function Team({ project, role, notify }: { project: Project; role: StaffRole; notify: Notify }) {
+function Team({ project, notify }: { project: Project; notify: Notify }) {
   const me = useStaff();
   const lead = canLeadProject(me, project);
   const [pick, setPick] = useState("");
+  const [busy, setBusy] = useState(false);
   const staffUsers = useStaffUsers();
-  const available = activeTeamMembers(staffUsers).filter((u) => !project.team.some((t) => t.name === u.name));
+  const available = activeTeamMembers(staffUsers).filter((u) => !project.team.some((t) => t.id === u.id));
   const leadChoices = activeLeads(staffUsers);
-  const actor = actingAs(me);
+
+  const assign = async () => {
+    const user = available.find((u) => String(u.id) === pick);
+    if (!user || busy) return;
+    setBusy(true);
+    try {
+      await assignMember(project.code, user.id);
+      setPick("");
+      notify(`${user.name} assigned and notified by email.`);
+    } catch (e) {
+      notify(errorMessage(e), "info");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const drop = async (userId: number, name: string) => {
+    setBusy(true);
+    try {
+      await removeMember(project.code, userId);
+      notify(`${name} removed from the team.`, "info");
+    } catch (e) {
+      notify(errorMessage(e), "info");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const setLead = async (userId: number) => {
+    setBusy(true);
+    try {
+      const person = await changeLead(project.code, userId);
+      notify(`${person.name} is now the project lead.`);
+    } catch (e) {
+      notify(errorMessage(e), "info");
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
     <div className={card}>
@@ -813,22 +965,21 @@ function Team({ project, role, notify }: { project: Project; role: StaffRole; no
       <ul className="mt-4 space-y-2.5">
         <AnimatePresence initial={false}>
           {project.team.map((m) => {
-            const isLead = m.name === project.lead.name;
+            const memberId = m.id ?? null;
+            const isLead = memberId !== null ? memberId === project.lead.id : m.name === project.lead.name;
             return (
-              <motion.li key={m.name} layout initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }} className="flex items-center gap-3">
+              <motion.li key={memberId ?? m.name} layout initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }} className="flex items-center gap-3">
                 <span className={cn("grid size-9 place-items-center rounded-full text-xs font-bold text-white", isLead ? "bg-brand" : "bg-navy")}>{initials(m.name)}</span>
                 <span className="min-w-0 flex-1">
                   <span className="block text-sm font-bold">{m.name}</span>
                   <span className="block text-xs text-muted">{isLead ? "Project lead" : m.role}</span>
                 </span>
-                {lead && !isLead && (
+                {lead && !isLead && memberId !== null && (
                   <button
-                    onClick={() => {
-                      removeMember(project, m, actor);
-                      notify(`${m.name} removed from the team.`, "info");
-                    }}
+                    disabled={busy}
+                    onClick={() => void drop(memberId, m.name)}
                     aria-label={`Remove ${m.name}`}
-                    className="rounded-lg p-1.5 text-muted hover:bg-mist hover:text-danger"
+                    className="rounded-lg p-1.5 text-muted hover:bg-mist hover:text-danger disabled:opacity-40"
                   >
                     <X className="size-4" />
                   </button>
@@ -836,50 +987,49 @@ function Team({ project, role, notify }: { project: Project; role: StaffRole; no
               </motion.li>
             );
           })}
+          {project.team.length === 0 && <li className="text-sm text-muted">Nobody is assigned yet.</li>}
         </AnimatePresence>
       </ul>
 
       {lead && (
         <div className="mt-4 space-y-2 border-t border-line pt-4">
           <div className="flex gap-2">
-            <select value={pick} onChange={(e) => setPick(e.target.value)} aria-label="Assign a team member" className={cn(input, "h-10")}>
+            <select value={pick} onChange={(e) => setPick(e.target.value)} disabled={busy} aria-label="Assign a team member" className={cn(input, "h-10")}>
               <option value="">Assign engineer…</option>
               {available.map((u) => (
-                <option key={u.id} value={u.id}>
+                <option key={u.id} value={String(u.id)}>
                   {u.name} ({personOf(u).role})
                 </option>
               ))}
             </select>
             <button
-              disabled={!pick}
-              onClick={() => {
-                const person = personOf(available.find((u) => u.id === pick)!);
-                assignMember(project, person, actor);
-                setPick("");
-                notify(`${person.name} assigned and notified by email.`);
-              }}
+              disabled={!pick || busy}
+              onClick={() => void assign()}
               className="grid size-10 shrink-0 place-items-center rounded-xl bg-navy text-white disabled:opacity-40"
               aria-label="Assign"
             >
-              <UserPlus className="size-4" />
+              {busy ? <Loader2 className="size-4 animate-spin" /> : <UserPlus className="size-4" />}
             </button>
           </div>
           <label className="flex items-center gap-2 text-xs text-muted">
             Project lead
-            <select
-              value={project.lead.name}
-              onChange={(e) => {
-                const next = personOf(leadChoices.find((u) => u.name === e.target.value)!);
-                changeLead(project, next, actor);
-                notify(`${next.name} is now the project lead.`);
-              }}
-              className="h-8 flex-1 rounded-lg border border-line bg-white px-2 text-xs font-bold text-navy outline-none focus:border-brand"
-            >
-              {!leadChoices.some((u) => u.name === project.lead.name) && <option>{project.lead.name}</option>}
-              {leadChoices.map((u) => (
-                <option key={u.id}>{u.name}</option>
-              ))}
-            </select>
+            {me.role === "admin" ? (
+              <select
+                value={project.lead.id != null ? String(project.lead.id) : ""}
+                disabled={busy}
+                onChange={(e) => void setLead(Number(e.target.value))}
+                className="h-8 flex-1 rounded-lg border border-line bg-white px-2 text-xs font-bold text-navy outline-none focus:border-brand disabled:opacity-40"
+              >
+                {!leadChoices.some((u) => u.id === project.lead.id) && <option value="">{project.lead.name}</option>}
+                {leadChoices.map((u) => (
+                  <option key={u.id} value={String(u.id)}>
+                    {u.name}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <span className="flex-1 text-xs font-bold text-navy">{project.lead.name} · only an admin can change this</span>
+            )}
           </label>
         </div>
       )}
@@ -887,9 +1037,25 @@ function Team({ project, role, notify }: { project: Project; role: StaffRole; no
   );
 }
 
-function ProjectIdCard({ project, role, notify, onCodeChange }: { project: Project; role: StaffRole; notify: Notify; onCodeChange: (code: string) => void }) {
+function ProjectIdCard({ project, notify, onCodeChange }: { project: Project; notify: Notify; onCodeChange: (code: string) => void }) {
   const me = useStaff();
   const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const regenerate = async () => {
+    setBusy(true);
+    try {
+      const result = await regenerateProjectCode(project.code);
+      setConfirming(false);
+      onCodeChange(result.code);
+      notify(`New Project ID ${result.code} issued. ${result.revoked} is revoked.`);
+    } catch (e) {
+      notify(errorMessage(e), "info");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className={card}>
       <h2 className="flex items-center gap-2 font-display text-lg font-bold">
@@ -903,19 +1069,11 @@ function ProjectIdCard({ project, role, notify, onCodeChange }: { project: Proje
           <div className="mt-3 rounded-xl border border-danger/20 bg-danger-soft p-3">
             <p className="text-xs text-danger">The old ID stops working immediately and the client is sent the new one by email and SMS.</p>
             <div className="mt-2 flex gap-2">
-              <button onClick={() => setConfirming(false)} className="h-9 flex-1 rounded-lg border border-line bg-white text-xs font-bold text-muted">
+              <button disabled={busy} onClick={() => setConfirming(false)} className="h-9 flex-1 rounded-lg border border-line bg-white text-xs font-bold text-muted disabled:opacity-40">
                 Cancel
               </button>
-              <button
-                onClick={() => {
-                  const code = regenerateProjectCode(project, actingAs(me));
-                  setConfirming(false);
-                  onCodeChange(code);
-                  notify(`New Project ID ${code} issued. ${project.code} is revoked.`);
-                }}
-                className="h-9 flex-1 rounded-lg bg-danger text-xs font-bold text-white"
-              >
-                Regenerate
+              <button disabled={busy} onClick={() => void regenerate()} className="flex h-9 flex-1 items-center justify-center gap-1.5 rounded-lg bg-danger text-xs font-bold text-white disabled:opacity-60">
+                {busy && <Loader2 className="size-3.5 animate-spin" />} Regenerate
               </button>
             </div>
           </div>
@@ -931,10 +1089,11 @@ function ProjectIdCard({ project, role, notify, onCodeChange }: { project: Proje
   );
 }
 
-function FilesEditor({ project, role, notify }: { project: Project; role: StaffRole; notify: Notify }) {
+function FilesEditor({ project, notify }: { project: Project; notify: Notify }) {
   const me = useStaff();
   const [kind, setKind] = useState<SharedFile["kind"]>("doc");
-  const actor = actingAs(me);
+  const [busy, setBusy] = useState(false);
+  const files: ProjectFile[] = project.files;
 
   const onFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
@@ -944,9 +1103,32 @@ function FilesEditor({ project, role, notify }: { project: Project; role: StaffR
       notify("Files must be 10 MB or smaller.", "info");
       return;
     }
-    const stored = await saveFile(f);
-    shareFile(project, { name: f.name, kind, size: formatBytes(f.size), blobId: stored.id }, actor);
-    notify(`${f.name} shared with ${project.client.name}.`);
+    setBusy(true);
+    try {
+      await shareFile(project.code, f, kind);
+      notify(`${f.name} shared with ${project.client.name}.`);
+    } catch (err) {
+      notify(errorMessage(err), "info");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const download = async (f: ProjectFile) => {
+    const path = apiPath(f.url);
+    if (!path || !(await openRemoteFile(path, f.name, "download"))) notify("We couldn't open that file. Please try again.", "info");
+  };
+
+  const drop = async (f: ProjectFile) => {
+    setBusy(true);
+    try {
+      await removeFile(f.id);
+      notify(`${f.name} removed.`, "info");
+    } catch (err) {
+      notify(errorMessage(err), "info");
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -959,16 +1141,22 @@ function FilesEditor({ project, role, notify }: { project: Project; role: StaffR
             <option value="design">Design</option>
             <option value="proposal">Proposal</option>
           </select>
-          <label className="flex h-9 cursor-pointer items-center gap-1.5 rounded-lg bg-navy px-3 text-xs font-bold text-white hover:bg-navy-700">
-            <Upload className="size-3.5" /> Upload
-            <input type="file" className="sr-only" onChange={onFile} />
+          <label className={cn("flex h-9 cursor-pointer items-center gap-1.5 rounded-lg bg-navy px-3 text-xs font-bold text-white hover:bg-navy-700", busy && "pointer-events-none opacity-60")}>
+            {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Upload className="size-3.5" />} Upload
+            <input
+              type="file"
+              className="sr-only"
+              disabled={busy}
+              accept=".pdf,.png,.jpg,.jpeg,.webp,.zip,.docx,.xlsx,.pptx"
+              onChange={(e) => void onFile(e)}
+            />
           </label>
         </div>
       </div>
-      <p className="mt-1 text-xs text-muted">Files appear in the client&apos;s portal for download.</p>
-      <ul className="mt-4 space-y-2">
+      <p className="mt-1 text-xs text-muted">PDFs, images, Office files or ZIP, up to 10 MB. Files are stored on the server and appear in the client&apos;s portal for download.</p>
+      <ul className="mt-4 space-y-2" aria-live="polite">
         <AnimatePresence initial={false}>
-          {project.files.map((f) => (
+          {files.map((f) => (
             <motion.li key={f.id} layout initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, x: 30 }} className="flex items-center gap-3 rounded-xl bg-mist p-2.5">
               <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-white">
                 <FileText className="size-4" />
@@ -982,24 +1170,15 @@ function FilesEditor({ project, role, notify }: { project: Project; role: StaffR
                   {f.note && <span className="block truncate italic">&ldquo;{f.note}&rdquo;</span>}
                 </span>
               </span>
-              <button
-                onClick={async () => {
-                  const { downloadSharedFile } = await import("@/lib/report");
-                  await downloadSharedFile(project, f);
-                }}
-                aria-label={`Download ${f.name}`}
-                className="rounded-lg p-1.5 text-muted hover:bg-white hover:text-navy"
-              >
+              <button onClick={() => void download(f)} aria-label={`Download ${f.name}`} className="rounded-lg p-1.5 text-muted hover:bg-white hover:text-navy">
                 <Download className="size-4" />
               </button>
               {canLeadProject(me, project) && (
                 <button
-                  onClick={() => {
-                    removeFile(project, f.id, actor);
-                    notify(`${f.name} removed.`, "info");
-                  }}
+                  disabled={busy}
+                  onClick={() => void drop(f)}
                   aria-label={`Remove ${f.name}`}
-                  className="rounded-lg p-1.5 text-muted hover:bg-white hover:text-danger"
+                  className="rounded-lg p-1.5 text-muted hover:bg-white hover:text-danger disabled:opacity-40"
                 >
                   <Trash2 className="size-4" />
                 </button>
@@ -1007,7 +1186,7 @@ function FilesEditor({ project, role, notify }: { project: Project; role: StaffR
             </motion.li>
           ))}
         </AnimatePresence>
-        {project.files.length === 0 && <li className="rounded-xl border border-dashed border-line py-6 text-center text-sm text-muted">No files shared yet.</li>}
+        {files.length === 0 && <li className="rounded-xl border border-dashed border-line py-6 text-center text-sm text-muted">No files shared yet.</li>}
       </ul>
     </div>
   );

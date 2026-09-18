@@ -99,7 +99,7 @@ final class Projects
 
     public static function portalUrl(): string
     {
-        return rtrim((string) \App\Core\Config::get('app.url', ''), '/');
+        return Links::portal();
     }
 
     /** Marks a project delivered after the client signs the handover (no staff actor). */

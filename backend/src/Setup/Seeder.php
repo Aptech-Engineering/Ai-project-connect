@@ -145,7 +145,7 @@ final class Seeder
             }
             foreach ($p['updates'] as $u) {
                 $author = $names[$staff[$u[1]]];
-                $at = self::day($u[0]) . ' 09:30:00';
+                $at = self::moment($u[0], '09:30:00');
                 $status = $u[5] ?? 'published';
                 Database::insert('updates', [
                     'project_id' => $id, 'author_id' => $author['id'], 'author_name' => $author['name'], 'author_role' => $author['job_title'],
@@ -165,7 +165,7 @@ final class Seeder
                 Database::insert('project_technologies', ['project_id' => $id, 'technology_id' => $tech, 'usage_note' => $usage]);
             }
             foreach ($p['messages'] ?? [] as [$day, $sender, $author, $body]) {
-                Database::insert('messages', ['project_id' => $id, 'sender' => $sender, 'author_name' => $author, 'body' => $body, 'created_at' => self::day($day) . ' 11:00:00']);
+                Database::insert('messages', ['project_id' => $id, 'sender' => $sender, 'author_name' => $author, 'body' => $body, 'created_at' => self::moment($day, '11:00:00')]);
             }
             return $id;
         };
@@ -252,7 +252,7 @@ final class Seeder
             ['IDEA-5TRNF', 'Chinedu Obi', 'chinedu@busstop.test', '08064448120', null, 'Anambra', 'BusStop Tickets', 'Logistics', ['Android app'], 'Travellers queue for hours at Onitsha parks to buy interstate bus tickets with no idea of seat availability.', 'Interstate travellers and bus park operators.', 'Book and pay for seats, see departure times, get an SMS e-ticket, operators manage manifests.', '₦1M – ₦3M', '1 – 3 months', 'NEW', null, -1],
             ['IDEA-9DCLN', 'Halima Yusuf', 'halima@crypto-ajo.test', '08097773321', null, 'Kaduna', 'Crypto Ajo', 'dApps (Web3)', ['dApp (Web3)'], 'Savings groups want to save in stablecoins but members do not trust a single treasurer with the wallet.', 'Informal savings groups of 10 to 30 members.', 'Multi-signature group wallet, contribution schedule, automatic payouts, member voting.', 'Under ₦1M', 'As soon as possible', 'DECLINED', 'Out of scope: regulated custody. Refund the fee.', -9],
         ] as [$ref, $name, $email, $phone, $org, $state, $title, $category, $platforms, $problem, $users, $features, $budget, $timeline, $status, $notes, $day]) {
-            $at = self::day($day) . ' 10:15:00';
+            $at = self::moment($day, '10:15:00');
             $ideaId = Database::insert('ideas', [
                 'ref' => $ref, 'name' => $name, 'email' => $email, 'phone' => $phone, 'organisation' => $org, 'country' => 'Nigeria', 'state' => $state,
                 'title' => $title, 'category' => $category, 'platforms' => json_encode($platforms, JSON_UNESCAPED_UNICODE), 'problem' => $problem,
@@ -283,7 +283,7 @@ final class Seeder
         }
 
         // An unfinished application (draft, fee not paid). Resume link: /apply?resume=<DEMO_DRAFT_TOKEN>
-        $draftAt = self::day(0) . ' 08:40:00';
+        $draftAt = self::moment(0, '08:40:00');
         $draftId = Database::insert('ideas', [
             'ref' => 'IDEA-7DRFT', 'name' => 'Funke Adeyemi', 'email' => 'funke@eventhall.test', 'phone' => '08023339911', 'country' => 'Nigeria', 'state' => 'Lagos',
             'title' => 'HallBook', 'category' => 'Marketplace', 'platforms' => json_encode(['Website'], JSON_UNESCAPED_UNICODE),
@@ -296,7 +296,7 @@ final class Seeder
         Database::insert('change_requests', [
             'project_id' => $farmlink, 'title' => 'Add pay-on-delivery for buyers', 'description' => 'Buyers should be able to pay cash when their order arrives.',
             'requested_by' => 'client', 'requester_name' => 'Ada Okafor', 'status' => 'QUOTED', 'impact_cost' => 350000, 'impact_days' => 10,
-            'response_note' => 'Needs a rider cash-collection flow and daily reconciliation report.', 'created_at' => self::day(-1) . ' 12:30:00',
+            'response_note' => 'Needs a rider cash-collection flow and daily reconciliation report.', 'created_at' => self::moment(-1, '12:30:00'),
         ]);
 
         // Delivered project with a signed handover
@@ -318,6 +318,12 @@ final class Seeder
 
         Database::insert('leads', ['project_id' => $farmlink, 'client_name' => 'Ada Okafor', 'contact' => 'ada@farmlink.test', 'technology_id' => 'react', 'course_id' => 'react', 'type' => 'info', 'source' => 'portal', 'status' => 'CONTACTED', 'notes' => 'Interested for her operations manager.', 'created_at' => self::day(-4) . ' 15:00:00']);
         Database::insert('leads', ['client_name' => 'Tolu Bello', 'contact' => 'tolu@example.test', 'course_id' => 'next', 'type' => 'enrol', 'source' => 'website', 'created_at' => self::day(-1) . ' 12:00:00']);
+    }
+
+    /** Like day(), with a time of day — never in the future, so demo data sorts the same whatever time the seed runs. */
+    private static function moment(int $offset, string $time): string
+    {
+        return min(self::day($offset) . ' ' . $time, date('Y-m-d H:i:s'));
     }
 
     private static function day(int $offset): string

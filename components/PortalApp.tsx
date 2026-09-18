@@ -7,11 +7,15 @@ import ProjectStatus from "./status/ProjectStatus";
 import Footer from "./Footer";
 import Toaster, { type Toast } from "./Toaster";
 import SubmitIdeaModal from "./SubmitIdeaModal";
-import { useProjects } from "@/lib/store";
+import { clientSignOut, useClientProject, useClientSession } from "@/lib/store";
+import { onSessionExpired } from "@/lib/api";
 import { useSiteContent } from "@/lib/content";
 import { CoursesSection, FliersSection } from "./HomeSections";
 
 export type Notify = (message: string, tone?: Toast["tone"]) => void;
+
+/** Which project this browser tab had open, so a refresh returns to it. */
+const LAST_PROJECT = "apc-last-project";
 
 export default function PortalApp() {
   const [projectCode, setProjectCode] = useState<string | null>(null);
@@ -21,9 +25,9 @@ export default function PortalApp() {
   const openIdea = useCallback((email?: string) => setIdea({ open: true, email }), []);
   const closeIdea = useCallback(() => setIdea((s) => ({ ...s, open: false })), []);
   const statusRef = useRef<HTMLDivElement>(null);
-  const projects = useProjects();
   const { brand } = useSiteContent();
-  const project = projectCode ? projects.find((p) => p.code === projectCode) : undefined;
+  const { session: client, refresh: refreshSession } = useClientSession();
+  const { data: project, error: projectError } = useClientProject(projectCode);
 
   const notify = useCallback<Notify>((message, tone = "success") => {
     const id = Math.random().toString(36).slice(2);
@@ -37,14 +41,52 @@ export default function PortalApp() {
     return () => window.clearTimeout(t);
   }, [projectCode]);
 
-  // If staff regenerate the Project ID while the client is viewing, end the session.
+  // Remember which project is open, so a refresh doesn't ask for the Project ID again.
+  // (Cleared on sign-out, not here: on a fresh load projectCode starts empty.)
   useEffect(() => {
-    if (projectCode && !project) {
+    if (!projectCode) return;
+    try {
+      sessionStorage.setItem(LAST_PROJECT, projectCode);
+    } catch {
+      /* private mode */
+    }
+  }, [projectCode]);
+
+  // Still signed in after a reload: reopen where they were, or their only project.
+  useEffect(() => {
+    if (projectCode || !client) return;
+    let last: string | null = null;
+    try {
+      last = sessionStorage.getItem(LAST_PROJECT);
+    } catch {
+      /* private mode */
+    }
+    const codes = client.projects.map((p) => p.code);
+    const reopen = last && codes.includes(last) ? last : codes.length === 1 ? codes[0] : null;
+    if (reopen) setProjectCode(reopen);
+  }, [client, projectCode]);
+
+  // The project is gone for this client: usually a Project ID the team regenerated.
+  useEffect(() => {
+    if (projectCode && projectError) {
       setProjectCode(null);
       setSession((n) => n + 1);
-      notify("Your Project ID was changed by the team for security. Please sign in with the new ID we sent you.", "info");
+      notify("We couldn't open that project. If your team sent you a new Project ID, sign in with that one.", "info");
     }
-  }, [projectCode, project, notify]);
+  }, [projectCode, projectError, notify]);
+
+  // The server ended the client session (signed out elsewhere, or it expired).
+  useEffect(
+    () =>
+      onSessionExpired((kind) => {
+        // Only meaningful while someone is actually signed in.
+        if (kind !== "client" || !projectCode) return;
+        setProjectCode(null);
+        setSession((n) => n + 1);
+        void refreshSession();
+      }),
+    [refreshSession, projectCode],
+  );
 
   // "Continue your application" links from email: /?resume=<token>
   useEffect(() => {
@@ -61,15 +103,22 @@ export default function PortalApp() {
     if (brand.pageTitle) document.title = brand.pageTitle;
   }, [brand.pageTitle]);
 
-  const signOut = useCallback(() => {
+  const signOut = useCallback(async () => {
+    try {
+      sessionStorage.removeItem(LAST_PROJECT);
+    } catch {
+      /* private mode */
+    }
+    await clientSignOut();
+    await refreshSession();
     setProjectCode(null);
     setSession((s) => s + 1);
     window.scrollTo({ top: 0, behavior: "smooth" });
-  }, []);
+  }, [refreshSession]);
 
   return (
     <>
-      <Navbar client={project?.client.short} onSignOut={signOut} onSubmitIdea={() => openIdea()} />
+      <Navbar client={project?.client.short ?? client?.client.short} onSignOut={signOut} onSubmitIdea={() => openIdea()} />
       <main>
         <Hero key={session} onVerified={setProjectCode} onReset={signOut} verifiedProject={project} />
         {project && (

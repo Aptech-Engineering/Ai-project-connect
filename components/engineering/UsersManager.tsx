@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
+  AlertTriangle,
   CheckCircle2,
   Copy,
   Eye,
@@ -18,18 +19,17 @@ import {
   Wand2,
   X,
 } from "lucide-react";
-import { logActivity, sendNotice } from "@/lib/store";
+import { ApiError, errorMessage } from "@/lib/api";
 import {
   ROLES,
   canViewProject,
+  changeOwnPassword,
   createStaffUser,
-  findUserByEmail,
   generatePassword,
   setStaffPassword,
   updateStaffUser,
+  useAllStaffUsers,
   useStaff,
-  useStaffUsers,
-  verifyPassword,
   type StaffRole,
   type StaffUser,
 } from "@/lib/staff";
@@ -42,13 +42,19 @@ const inputClass =
 
 type Filter = StaffRole | "ALL" | "DISABLED";
 
-export default function UsersManager({ notify, projects }: { notify: Notify; projects: Project[] }) {
+/** Field messages the server sent back, so a form can show them next to the right input. */
+function fieldErrors(e: unknown): Record<string, string> {
+  return e instanceof ApiError && Object.keys(e.errors).length ? e.errors : {};
+}
+
+export default function UsersManager({ notify, projects = [] }: { notify: Notify; projects?: Project[] }) {
   const me = useStaff();
-  const users = useStaffUsers();
+  const { users, loading, error } = useAllStaffUsers();
   const [filter, setFilter] = useState<Filter>("ALL");
   const [query, setQuery] = useState("");
   const [editing, setEditing] = useState<StaffUser | "new" | null>(null);
   const [resetting, setResetting] = useState<StaffUser | null>(null);
+  const [busyId, setBusyId] = useState<number | null>(null);
 
   const activeAdmins = users.filter((u) => u.role === "admin" && u.status === "active").length;
   const counts = useMemo(() => {
@@ -63,7 +69,10 @@ export default function UsersManager({ notify, projects }: { notify: Notify; pro
     .filter((u) => !q || [u.name, u.email, u.jobTitle ?? ""].some((s) => s.toLowerCase().includes(q)))
     .sort((a, b) => Number(a.status === "disabled") - Number(b.status === "disabled") || a.name.localeCompare(b.name));
 
-  /** Guards shared by the table actions and the edit form. */
+  /**
+   * The same guards the server applies, so we can explain them before the request.
+   * The server has the final word and its message is shown if it still refuses.
+   */
   const blockReason = (user: StaffUser, next: { role?: StaffRole; status?: StaffUser["status"] }) => {
     const losesAdmin = user.role === "admin" && user.status === "active" && ((next.role && next.role !== "admin") || next.status === "disabled");
     if (losesAdmin && user.id === me.id) return "You can't remove your own admin access.";
@@ -71,13 +80,19 @@ export default function UsersManager({ notify, projects }: { notify: Notify; pro
     return null;
   };
 
-  const toggleStatus = (user: StaffUser) => {
+  const toggleStatus = async (user: StaffUser) => {
     const status = user.status === "active" ? "disabled" : "active";
     const reason = blockReason(user, { status });
     if (reason) return notify(reason, "info");
-    updateStaffUser(user.id, { status });
-    logActivity(`${me.name} (Admin)`, `${status === "disabled" ? "Disabled" : "Enabled"} the account for ${user.name}`);
-    notify(status === "disabled" ? `${user.name} can no longer sign in.` : `${user.name} can sign in again.`, status === "disabled" ? "info" : "success");
+    setBusyId(user.id);
+    try {
+      await updateStaffUser(user.id, { status });
+      notify(status === "disabled" ? `${user.name} can no longer sign in.` : `${user.name} can sign in again.`, status === "disabled" ? "info" : "success");
+    } catch (e) {
+      notify(errorMessage(e), "info");
+    } finally {
+      setBusyId(null);
+    }
   };
 
   return (
@@ -106,7 +121,7 @@ export default function UsersManager({ notify, projects }: { notify: Notify; pro
           >
             <div className="flex items-center justify-between">
               <span className={cn("rounded-full px-2.5 py-1 text-[11px] font-bold", ROLES[role].className)}>{ROLES[role].label}</span>
-              <span className="font-display text-2xl font-bold">{counts[role]}</span>
+              <span className="font-display text-2xl font-bold">{loading ? "–" : counts[role]}</span>
             </div>
             <p className="mt-2 text-xs leading-relaxed text-muted">{ROLES[role].description}</p>
           </motion.button>
@@ -117,12 +132,12 @@ export default function UsersManager({ notify, projects }: { notify: Notify; pro
       <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center">
         <div className="flex h-11 flex-1 items-center gap-2 rounded-xl border border-line bg-white px-3 focus-within:border-brand focus-within:ring-4 focus-within:ring-brand/15">
           <Search className="size-4 text-muted" />
-          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search by name, email or job title" className="h-full w-full bg-transparent text-sm outline-none" />
+          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search by name, email or job title" aria-label="Search users" className="h-full w-full bg-transparent text-sm outline-none" />
         </div>
         <div className="no-scrollbar flex gap-1.5 overflow-x-auto">
           {(["ALL", "DISABLED"] as const).map((f) => (
             <button key={f} onClick={() => setFilter(f)} className={cn("shrink-0 rounded-full px-3.5 py-2 text-xs font-bold", filter === f ? "bg-navy text-white" : "bg-white text-muted hover:text-navy")}>
-              {f === "ALL" ? "All users" : "Disabled"} <span className="opacity-60">{counts[f]}</span>
+              {f === "ALL" ? "All users" : "Disabled"} <span className="opacity-60">{loading ? "" : counts[f]}</span>
             </button>
           ))}
         </div>
@@ -142,8 +157,9 @@ export default function UsersManager({ notify, projects }: { notify: Notify; pro
             {list.map((u) => {
               const assigned = projects.filter((p) => u.role !== "admin" && canViewProject(u, p)).length;
               const disabled = u.status === "disabled";
+              const busy = busyId === u.id;
               return (
-                <motion.li key={u.id} layout initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className={cn("grid gap-3 px-5 py-4 lg:grid-cols-[2fr_1.1fr_1fr_0.9fr_auto] lg:items-center lg:gap-4", disabled && "bg-mist/50")}>
+                <motion.li key={u.id} layout initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className={cn("grid gap-3 px-5 py-4 lg:grid-cols-[2fr_1.1fr_1fr_0.9fr_auto] lg:items-center lg:gap-4", disabled && "bg-mist/50", busy && "opacity-60")}>
                   <div className="flex min-w-0 items-center gap-3">
                     <span className={cn("grid size-10 shrink-0 place-items-center rounded-full text-xs font-bold text-white", disabled ? "bg-muted/50" : u.role === "admin" ? "bg-brand" : "bg-navy")}>{initials(u.name)}</span>
                     <div className="min-w-0">
@@ -160,16 +176,19 @@ export default function UsersManager({ notify, projects }: { notify: Notify; pro
                     <span className={cn("rounded-full px-2.5 py-1 text-[11px] font-bold", ROLES[u.role].className)}>{ROLES[u.role].label}</span>
                     {u.jobTitle && u.jobTitle !== ROLES[u.role].label && <p className="mt-1 text-xs text-muted">{u.jobTitle}</p>}
                   </div>
-                  <p className="text-sm text-muted">{u.role === "admin" ? "All projects" : u.role === "counsellor" ? "—" : `${assigned} assigned`}</p>
+                  <p className="text-sm text-muted">
+                    {u.role === "admin" ? "All projects" : u.role === "counsellor" ? "—" : projects.length ? `${assigned} assigned` : "Set on each project"}
+                  </p>
                   <p className="text-sm text-muted">{u.lastLoginAt ? relativeDay(u.lastLoginAt) : "Never"}</p>
                   <div className="flex items-center gap-1 lg:w-32 lg:justify-end">
-                    <IconButton label="Edit" onClick={() => setEditing(u)}>
+                    {busy && <Loader2 className="size-4 animate-spin text-brand" />}
+                    <IconButton label="Edit" disabled={busy} onClick={() => setEditing(u)}>
                       <Pencil className="size-4" />
                     </IconButton>
-                    <IconButton label="Reset password" onClick={() => setResetting(u)}>
+                    <IconButton label="Reset password" disabled={busy} onClick={() => setResetting(u)}>
                       <KeyRound className="size-4" />
                     </IconButton>
-                    <IconButton label={disabled ? "Enable account" : "Disable account"} danger={!disabled} onClick={() => toggleStatus(u)}>
+                    <IconButton label={disabled ? "Enable account" : "Disable account"} danger={!disabled} disabled={busy} onClick={() => void toggleStatus(u)}>
                       {disabled ? <UserCheck className="size-4" /> : <UserX className="size-4" />}
                     </IconButton>
                   </div>
@@ -177,7 +196,22 @@ export default function UsersManager({ notify, projects }: { notify: Notify; pro
               );
             })}
           </AnimatePresence>
-          {list.length === 0 && <li className="py-14 text-center text-sm text-muted">No users match.</li>}
+          {loading && (
+            <li className="flex items-center justify-center gap-2 py-14 text-sm text-muted" role="status" aria-live="polite">
+              <Loader2 className="size-4 animate-spin text-brand" /> Loading the team…
+            </li>
+          )}
+          {!loading && error && (
+            <li className="py-12 text-center" role="alert">
+              <AlertTriangle className="mx-auto size-7 text-danger" />
+              <p className="mt-2 text-sm font-bold">We couldn&apos;t load the staff accounts.</p>
+              <p className="mt-1 text-sm text-muted">{error}</p>
+              <button onClick={() => window.location.reload()} className="mt-3 rounded-full border border-line px-4 py-2 text-sm font-bold hover:border-navy">
+                Reload the page
+              </button>
+            </li>
+          )}
+          {!loading && !error && list.length === 0 && <li className="py-14 text-center text-sm text-muted">No users match.</li>}
         </ul>
       </div>
 
@@ -186,12 +220,7 @@ export default function UsersManager({ notify, projects }: { notify: Notify; pro
         Disabling an account signs that person out immediately and keeps their name on past updates. Project access for leads and engineers comes from the Team section on each project.
       </p>
 
-      <UserDrawer
-        user={editing}
-        onClose={() => setEditing(null)}
-        notify={notify}
-        blockReason={blockReason}
-      />
+      <UserDrawer user={editing} onClose={() => setEditing(null)} notify={notify} blockReason={blockReason} />
       <ResetPasswordDialog user={resetting} onClose={() => setResetting(null)} notify={notify} />
     </div>
   );
@@ -250,7 +279,6 @@ function UserForm({
   notify: Notify;
   blockReason: (user: StaffUser, next: { role?: StaffRole; status?: StaffUser["status"] }) => string | null;
 }) {
-  const me = useStaff();
   const [name, setName] = useState(existing?.name ?? "");
   const [email, setEmail] = useState(existing?.email ?? "");
   const [phone, setPhone] = useState(existing?.phone ?? "");
@@ -264,11 +292,11 @@ function UserForm({
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (busy) return;
     const next: Record<string, string> = {};
     if (name.trim().length < 2) next.name = "Enter the person's full name.";
     if (!existing) {
       if (!/^\S+@\S+\.\S+$/.test(email.trim())) next.email = "Enter a valid work email.";
-      else if (findUserByEmail(email)) next.email = "A user with this email already exists.";
       if (password.length < 10) next.password = "Use at least 10 characters.";
     }
     if (phone && phone.replace(/\D/g, "").length < 7) next.phone = "Enter a valid phone number.";
@@ -280,25 +308,23 @@ function UserForm({
     if (Object.keys(next).length) return;
 
     setBusy(true);
-    if (existing) {
-      updateStaffUser(existing.id, { name: name.trim(), phone: phone.trim() || undefined, role, jobTitle: jobTitle.trim() || undefined });
-      if (role !== existing.role) logActivity(`${me.name} (Admin)`, `Changed ${existing.name}'s role from ${ROLES[existing.role].label} to ${ROLES[role].label}`);
-      notify(`${name.trim()} updated.`);
-      onDone();
-    } else {
-      const user = await createStaffUser({ name, email, phone, role, jobTitle, password });
-      logActivity(`${me.name} (Admin)`, `Created a ${ROLES[role].label} account for ${user.name}`);
-      sendNotice({
-        audience: "staff",
-        channel: "email",
-        to: `${user.name} · ${user.email}`,
-        subject: "Your AI Project Connect staff account",
-        body: `Hi ${user.name.split(" ")[0]},\n\nAn admin created a ${ROLES[role].label} account for you. Sign in at /engineering with ${user.email} and the temporary password your admin shares with you. You'll be asked to choose a new password.`,
-      });
-      setCreated({ user, password });
-      notify(`${user.name} can now sign in.`);
+    try {
+      if (existing) {
+        await updateStaffUser(existing.id, { name: name.trim(), phone: phone.trim() || null, role, jobTitle: jobTitle.trim() || null });
+        notify(`${name.trim()} updated.`);
+        onDone();
+      } else {
+        // The server hashes the password, emails the person and makes them change it.
+        const user = await createStaffUser({ name, email, phone, role, jobTitle, password });
+        setCreated({ user, password });
+        notify(`${user.name} can now sign in.`);
+      }
+    } catch (err) {
+      const fields = fieldErrors(err);
+      setErrors(Object.keys(fields).length ? fields : { form: errorMessage(err) });
+    } finally {
+      setBusy(false);
     }
-    setBusy(false);
   };
 
   if (created) {
@@ -306,7 +332,7 @@ function UserForm({
       <div className="flex-1 overflow-y-auto px-6 py-8 text-center">
         <CheckCircle2 className="mx-auto size-12 text-teal" />
         <p className="mt-3 font-display text-xl font-bold">{created.user.name} is ready</p>
-        <p className="mt-1 text-sm text-muted">Share these sign-in details privately. The password is only shown once; they'll be asked to change it.</p>
+        <p className="mt-1 text-sm text-muted">Share these sign-in details privately. The password is only shown once; they&apos;ll be asked to change it.</p>
         <CredentialBox email={created.user.email} password={created.password} />
         <button onClick={onDone} className="mt-6 h-11 w-full rounded-xl bg-navy font-bold text-white">
           Done
@@ -371,9 +397,13 @@ function UserForm({
             </div>
           </FormField>
         )}
+
+        <p role="status" aria-live="polite" className={cn("text-sm font-bold text-danger", !errors.form && "sr-only")}>
+          {busy ? "Saving…" : errors.form ?? ""}
+        </p>
       </div>
       <div className="flex gap-2 border-t border-line px-6 py-4">
-        <button type="button" onClick={onDone} className="h-11 flex-1 rounded-xl border border-line font-bold text-muted">
+        <button type="button" onClick={onDone} disabled={busy} className="h-11 flex-1 rounded-xl border border-line font-bold text-muted disabled:opacity-50">
           Cancel
         </button>
         <button disabled={busy} className="flex h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-navy font-bold text-white hover:bg-navy-700 disabled:opacity-60">
@@ -386,17 +416,36 @@ function UserForm({
 }
 
 function ResetPasswordDialog({ user, onClose, notify }: { user: StaffUser | null; onClose: () => void; notify: Notify }) {
-  const me = useStaff();
   const [password, setPassword] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
   const close = () => {
     setPassword(null);
+    setError("");
     onClose();
   };
+
+  const reset = async () => {
+    if (!user || busy) return;
+    const next = generatePassword();
+    setBusy(true);
+    setError("");
+    try {
+      await setStaffPassword(user.id, next);
+      setPassword(next);
+      notify(`Password reset for ${user.name}.`, "info");
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <Modal open={Boolean(user)} onClose={close} title={password ? "New temporary password" : `Reset password for ${user?.name}`}>
       {password && user ? (
         <>
-          <p className="text-sm text-muted">Share this privately with {user.name.split(" ")[0]}. It's only shown once and they'll be asked to change it.</p>
+          <p className="text-sm text-muted">Share this privately with {user.name.split(" ")[0]}. It&apos;s only shown once and they&apos;ll be asked to change it.</p>
           <CredentialBox email={user.email} password={password} />
           <button onClick={close} className="mt-5 h-11 w-full rounded-xl bg-navy font-bold text-white">
             Done
@@ -404,23 +453,16 @@ function ResetPasswordDialog({ user, onClose, notify }: { user: StaffUser | null
         </>
       ) : (
         <>
-          <p className="text-sm text-muted">Their current password stops working immediately. You'll get a temporary password to share with them.</p>
+          <p className="text-sm text-muted">Their current password stops working immediately. You&apos;ll get a temporary password to share with them.</p>
+          <p role="status" aria-live="polite" className={cn("mt-3 rounded-xl bg-danger-soft px-3 py-2 text-sm font-bold text-danger", !error && "sr-only")}>
+            {busy ? "Resetting…" : error}
+          </p>
           <div className="mt-5 flex gap-2">
-            <button onClick={close} className="h-11 flex-1 rounded-xl border border-line font-bold text-muted">
+            <button onClick={close} disabled={busy} className="h-11 flex-1 rounded-xl border border-line font-bold text-muted disabled:opacity-50">
               Cancel
             </button>
-            <button
-              onClick={async () => {
-                if (!user) return;
-                const next = generatePassword();
-                await setStaffPassword(user.id, next, true);
-                logActivity(`${me.name} (Admin)`, `Reset the password for ${user.name}`);
-                setPassword(next);
-                notify(`Password reset for ${user.name}.`, "info");
-              }}
-              className="h-11 flex-1 rounded-xl bg-brand font-bold text-white hover:bg-brand-600"
-            >
-              Reset password
+            <button onClick={() => void reset()} disabled={busy} className="flex h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-brand font-bold text-white hover:bg-brand-600 disabled:opacity-60">
+              {busy && <Loader2 className="size-4 animate-spin" />} Reset password
             </button>
           </div>
         </>
@@ -441,25 +483,31 @@ export function AccountDialog({ open, onClose, notify }: { open: boolean; onClos
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (busy) return;
     setError("");
-    if (!(await verifyPassword(me, current))) return setError("Your current password is incorrect.");
     if (next.length < 10) return setError("Your new password must be at least 10 characters.");
     if (next !== confirm) return setError("The new passwords don't match.");
     if (next === current) return setError("Choose a different password from your current one.");
     setBusy(true);
-    await setStaffPassword(me.id, next, false);
-    setBusy(false);
-    setCurrent("");
-    setNext("");
-    setConfirm("");
-    notify("Password updated.");
-    onClose();
+    try {
+      // The server checks the current password; nothing is hashed in the browser.
+      await changeOwnPassword(current, next);
+      setCurrent("");
+      setNext("");
+      setConfirm("");
+      notify("Password updated.");
+      onClose();
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
     <Modal open={open} onClose={forced ? undefined : onClose} title={forced ? "Choose your own password" : "Change password"}>
       {forced && <p className="mb-4 rounded-xl bg-brand-soft px-3 py-2 text-sm text-brand-700">You signed in with a temporary password. Set a new one to continue.</p>}
-      <form onSubmit={submit} className="space-y-3">
+      <form onSubmit={submit} className="space-y-3" noValidate>
         <FormField label={forced ? "Temporary password" : "Current password"}>
           <input type="password" value={current} onChange={(e) => setCurrent(e.target.value)} className={inputClass} autoComplete="current-password" autoFocus />
         </FormField>
@@ -469,10 +517,12 @@ export function AccountDialog({ open, onClose, notify }: { open: boolean; onClos
         <FormField label="Confirm new password">
           <input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} className={inputClass} autoComplete="new-password" />
         </FormField>
-        {error && <p className="rounded-xl bg-danger-soft px-3 py-2 text-sm font-bold text-danger">{error}</p>}
+        <p role="alert" aria-live="assertive" className={cn("rounded-xl bg-danger-soft px-3 py-2 text-sm font-bold text-danger", !error && "sr-only")}>
+          {error}
+        </p>
         <div className="flex gap-2 pt-2">
           {!forced && (
-            <button type="button" onClick={onClose} className="h-11 flex-1 rounded-xl border border-line font-bold text-muted">
+            <button type="button" onClick={onClose} disabled={busy} className="h-11 flex-1 rounded-xl border border-line font-bold text-muted disabled:opacity-50">
               Cancel
             </button>
           )}
@@ -524,9 +574,16 @@ function FormField({ label, error, hint, children }: { label: string; error?: st
   );
 }
 
-function IconButton({ label, onClick, children, danger }: { label: string; onClick: () => void; children: React.ReactNode; danger?: boolean }) {
+function IconButton({ label, onClick, children, danger, disabled }: { label: string; onClick: () => void; children: React.ReactNode; danger?: boolean; disabled?: boolean }) {
   return (
-    <button type="button" onClick={onClick} aria-label={label} title={label} className={cn("rounded-lg p-2 text-muted transition", danger ? "hover:bg-danger-soft hover:text-danger" : "hover:bg-mist hover:text-navy")}>
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      aria-label={label}
+      title={label}
+      className={cn("rounded-lg p-2 text-muted transition disabled:opacity-40", danger ? "hover:bg-danger-soft hover:text-danger" : "hover:bg-mist hover:text-navy")}
+    >
       {children}
     </button>
   );

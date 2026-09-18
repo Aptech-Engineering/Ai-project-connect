@@ -1,122 +1,223 @@
 "use client";
 
-import { PROJECTS } from "./data";
-import { createCollection } from "./collection";
-import type { ActivityEntry, CourseEvent, CourseLead, Notice, Person, Project } from "./types";
+/**
+ * Server-backed data for both panels. Every hook is a cached GET; mutations live
+ * in actions.ts / flows.ts and call `refreshProjects()` when they change something.
+ */
+import { api, query } from "./api";
+import { clearCache, invalidate, useApi } from "./remote";
+import type { Activity, CourseLead, Notice, Project, StageKey, Update } from "./types";
 
-function ago(days: number) {
-  const d = new Date();
-  d.setDate(d.getDate() - days);
-  return d.toISOString();
+export const KEYS = {
+  staffProjects: "/staff/projects",
+  clientProjects: "/client/projects",
+  clientMe: "/client/me",
+  dashboard: "/staff/dashboard",
+  approvals: "/staff/approvals",
+  messages: "/staff/messages",
+  notifications: "/staff/notifications",
+  ideas: "/staff/ideas",
+  payments: "/staff/payments",
+  leads: "/staff/leads",
+  changeRequests: "/staff/change-requests",
+  activity: "/admin/activity",
+  reports: "/admin/reports",
+} as const;
+
+/* ---------------- staff ---------------- */
+
+export interface DashboardSummary {
+  activeProjects: number;
+  deliveredProjects: number;
+  pendingApprovals: number;
+  /** Projects where the client asked something and nobody has replied. */
+  needsReply: number;
+  avgDaysSinceClientUpdate: number;
+  staleProjects: { code: string; title: string; daysSinceClientUpdate: number }[];
+  newIdeas: number;
+  newLeads: number;
+  /** Admins only. */
+  paymentsToConfirm?: number;
+  refundsPending?: number;
 }
 
-const SEED_LEADS: CourseLead[] = [
-  { id: "l1", at: ago(4), projectCode: "APC-26-7KQ9X", projectTitle: "FarmLink Marketplace", clientName: "Ada Okafor", techId: "react", courseId: "react", type: "info", status: "CONTACTED", notes: "Interested for her operations manager." },
-  { id: "l2", at: ago(1), projectCode: "APC-26-M4TR8", projectTitle: "ClinicQueue", clientName: "Dr. Kemi Balogun", techId: "next", courseId: "next", type: "enrol", status: "NEW" },
-];
+/** One row of the projects list. The full project comes from `useStaffProject(code)`. */
+export interface ProjectSummary {
+  id: number;
+  code: string;
+  title: string;
+  clientName: string;
+  leadName: string | null;
+  stage: StageKey;
+  progress: number;
+  targetDate: string;
+  lastClientUpdateAt: string | null;
+  daysSinceClientUpdate: number | null;
+  stale: boolean;
+  pendingUpdates: number;
+  needsReply: boolean;
+}
 
-const projects = createCollection<Project>("apc-demo-projects-v1", PROJECTS);
-const leads = createCollection<CourseLead>("apc-demo-leads-v1", SEED_LEADS);
-const outbox = createCollection<Notice>("apc-demo-outbox-v1", []);
+/** An update waiting for a lead to approve it, with the project it belongs to. */
+export interface PendingUpdate extends Update {
+  projectCode: string;
+  projectTitle: string;
+}
 
-function seedEvents(): CourseEvent[] {
-  const out: CourseEvent[] = [];
-  const counts: Record<string, [number, number]> = { react: [42, 12], flutter: [30, 9], node: [18, 5], figma: [25, 7] };
-  let n = 0;
-  for (const [courseId, [views, clicks]] of Object.entries(counts)) {
-    for (let i = 0; i < views; i++) out.push({ id: `ev${n++}`, at: ago((i * 7) % 40), event: "view", courseId });
-    for (let i = 0; i < clicks; i++) out.push({ id: `ev${n++}`, at: ago((i * 5) % 40), event: "click", courseId, techId: courseId });
+export interface MessageThread {
+  projectCode: string;
+  projectTitle: string;
+  clientName: string;
+  needsReply: boolean;
+  messageCount: number;
+  last?: { from: "client" | "team"; author: string; text: string; at: string };
+}
+
+export function useDashboard() {
+  return useApi<DashboardSummary>(KEYS.dashboard);
+}
+
+export function useStaffProjects(filters: { stage?: string; q?: string } = {}) {
+  const { data, loading, error, refresh } = useApi<ProjectSummary[]>(KEYS.staffProjects + query(filters));
+  return { projects: data ?? [], loading, error, refresh };
+}
+
+export function useStaffProject(code: string | null) {
+  return useApi<Project>(code ? `${KEYS.staffProjects}/${code}` : null);
+}
+
+/** Client-visible updates an engineer wrote that a lead still has to approve. */
+export function useApprovals() {
+  const { data, loading, error } = useApi<PendingUpdate[]>(KEYS.approvals);
+  return { updates: data ?? [], loading, error };
+}
+
+export function useMessageThreads() {
+  const { data, loading, error } = useApi<MessageThread[]>(KEYS.messages);
+  return { threads: data ?? [], loading, error };
+}
+
+/** The notification outbox (admin). */
+export function useNotifications(filters: { audience?: string; status?: string } = {}) {
+  const { data, loading, error } = useApi<Notice[]>(KEYS.notifications + query(filters));
+  return { notices: data ?? [], loading, error };
+}
+
+export interface ExistingClient {
+  id: number;
+  name: string;
+  email?: string | null;
+  phone?: string | null;
+  organisation?: string | null;
+  country?: string | null;
+  state?: string | null;
+  projects: number;
+}
+
+/** Clients we already work with, for the walk-in form's "returning client" search. */
+export function useStaffClients(q: string) {
+  const search = q.trim();
+  const { data, loading } = useApi<ExistingClient[]>(search.length >= 2 ? "/staff/clients" + query({ q: search }) : null);
+  return { clients: data ?? [], loading };
+}
+
+export interface LeadStats {
+  total?: number;
+  enrolled?: number;
+  contacted?: number;
+  [key: string]: number | undefined;
+}
+
+export function useLeads(status?: string) {
+  const { data, loading, error } = useApi<{ leads: CourseLead[]; stats?: LeadStats }>(KEYS.leads + query({ status }));
+  return { leads: data?.leads ?? [], stats: data?.stats, loading, error };
+}
+
+/** Counsellors move a course lead along: NEW → CONTACTED → ENROLLED / CLOSED. */
+export async function updateLead(id: number, patch: { status?: CourseLead["status"]; notes?: string | null }) {
+  const lead = await api.patch<CourseLead>(`${KEYS.leads}/${id}`, patch);
+  await refreshLeads();
+  return lead;
+}
+
+export interface ActivityFilters {
+  q?: string;
+  page?: number;
+  actorType?: "staff" | "client" | "system";
+  projectCode?: string;
+  /** YYYY-MM-DD */
+  from?: string;
+  to?: string;
+}
+
+/** The audit trail, 50 entries a page. `activityCsvPath` downloads the same rows. */
+export function useActivity(filters: ActivityFilters = {}) {
+  const { data, loading, error, refresh } = useApi<{ items: Activity[]; page: number; pages: number; total: number }>(KEYS.activity + query(filters));
+  return { items: data?.items ?? [], page: data?.page ?? 1, pages: data?.pages ?? 1, total: data?.total ?? 0, loading, error, refresh };
+}
+
+export const activityCsvPath = (filters: ActivityFilters = {}) => `${KEYS.activity}.csv${query(filters)}`;
+
+export function useReports(days = 90) {
+  return useApi<Record<string, unknown>>(KEYS.reports + query({ days }));
+}
+
+/* ---------------- client portal ---------------- */
+
+export interface ClientSession {
+  client: { name: string; short: string };
+  projects: { code: string; title: string; stage: string; progress: number }[];
+}
+
+/** The signed-in client and their projects, or undefined when signed out. */
+export function useClientSession() {
+  const { data, loading, error, refresh } = useApi<ClientSession>(KEYS.clientMe);
+  return { session: data, loading, error, refresh };
+}
+
+export function useClientProject(code: string | null) {
+  return useApi<Project>(code ? `${KEYS.clientProjects}/${code}` : null);
+}
+
+export async function requestClientCode(projectCode: string) {
+  return api.post<{ sentTo?: { email?: string; phone?: string }; expiresInMinutes?: number; resendInSeconds?: number; devCode?: string }>("/client/auth/request-code", { projectCode });
+}
+
+export async function verifyClientCode(projectCode: string, code: string) {
+  const res = await api.post<{ project?: Project; code?: string }>("/client/auth/verify", { projectCode, code });
+  clearCache();
+  return res;
+}
+
+export async function clientSignOut() {
+  try {
+    await api.post("/client/auth/logout");
+  } finally {
+    clearCache();
   }
-  return out;
 }
 
-const courseEvents = createCollection<CourseEvent>("apc-demo-course-events-v1", seedEvents());
-const activityLog = createCollection<ActivityEntry>("apc-demo-activity-v1", []);
+/* ---------------- refreshing ---------------- */
 
-export function uid() {
-  return Math.random().toString(36).slice(2, 10);
+/** Reloads anything that shows a project after a change. */
+export function refreshProjects() {
+  return invalidate(KEYS.staffProjects, KEYS.clientProjects, KEYS.clientMe, KEYS.dashboard, KEYS.approvals, KEYS.messages, KEYS.activity, KEYS.reports);
 }
 
-/* ---------- projects ---------- */
-
-export const useProjects = () => projects.useItems();
-
-export const readProjects = () => projects.read();
-
-export function findProject(code: string): Project | undefined {
-  return projects.read().find((p) => p.code === code.trim().toUpperCase());
+/** Reloads the idea inbox, payments and everything derived from them. */
+export function refreshIdeas() {
+  return invalidate(KEYS.ideas, KEYS.payments, KEYS.dashboard, KEYS.activity, KEYS.reports);
 }
 
-/** Finds the project an old, regenerated Project ID used to belong to. */
-export function findRevoked(code: string): Project | undefined {
-  const c = code.trim().toUpperCase();
-  return projects.read().find((p) => p.revokedCodes?.includes(c));
+export function refreshLeads() {
+  return invalidate(KEYS.leads, KEYS.dashboard, KEYS.reports);
 }
 
-export function updateProject(code: string, fn: (p: Project) => Project) {
-  projects.set((all) => all.map((p) => (p.code === code ? fn(p) : p)));
+export function refreshNotifications() {
+  return invalidate(KEYS.notifications, KEYS.dashboard);
 }
 
-export function addProject(project: Project) {
-  projects.set((all) => [project, ...all]);
-}
-
-export function withActivity(p: Project, actor: Person | string, action: string): Project {
-  const who = typeof actor === "string" ? actor : `${actor.name} (${actor.role})`;
-  logActivity(who, action, p.code);
-  return { ...p, activity: [{ id: uid(), at: new Date().toISOString(), actor: who, action }, ...(p.activity ?? [])] };
-}
-
-/* ---------- admin-wide activity log ---------- */
-
-export const useActivityLog = () => activityLog.useItems();
-
-export function logActivity(actor: Person | string, action: string, projectCode?: string) {
-  const who = typeof actor === "string" ? actor : `${actor.name} (${actor.role})`;
-  const actorType: ActivityEntry["actorType"] = who.includes("(Client)") ? "client" : who === "System" ? "system" : "staff";
-  activityLog.set((all) => [{ id: uid(), at: new Date().toISOString(), actorType, actor: who, action, projectCode }, ...all].slice(0, 2000));
-}
-
-/* ---------- course funnel events (LS-05) ---------- */
-
-export const useCourseEvents = () => courseEvents.useItems();
-
-export function recordCourseEvent(event: CourseEvent["event"], courseId: string, techId?: string, projectCode?: string) {
-  courseEvents.set((all) => [...all, { id: uid(), at: new Date().toISOString(), event, courseId, techId, projectCode }].slice(-5000));
-}
-
-/* ---------- course leads ---------- */
-
-export const useLeads = () => leads.useItems();
-
-export function addLead(lead: Omit<CourseLead, "id" | "at" | "status">) {
-  leads.set((all) => [{ ...lead, id: uid(), at: new Date().toISOString(), status: "NEW" }, ...all]);
-}
-
-export function updateLead(id: string, patch: Partial<CourseLead>) {
-  leads.set((all) => all.map((l) => (l.id === id ? { ...l, ...patch } : l)));
-}
-
-/* ---------- notification outbox (mock email / SMS) ---------- */
-
-export const useOutbox = () => outbox.useItems();
-
-export function sendNotice(n: Omit<Notice, "id" | "at">) {
-  outbox.set((all) => [{ ...n, id: uid(), at: new Date().toISOString() }, ...all].slice(0, 200));
-}
-
-export function notifyClient(p: Project, subject: string, body: string, channel: Notice["channel"] = "email+sms") {
-  sendNotice({ audience: "client", channel, to: `${p.client.name} · ${p.client.emailMasked} · ${p.client.phoneMasked}`, subject, body, projectCode: p.code });
-}
-
-export function notifyStaff(to: string, subject: string, body: string, projectCode?: string) {
-  sendNotice({ audience: "staff", channel: "email", to, subject, body, projectCode });
-}
-
-export function resetStore() {
-  projects.reset();
-  leads.reset();
-  outbox.reset();
-  courseEvents.reset();
-  activityLog.reset();
+/** Records a course view/click so the funnel report can count it. Invites are counted server-side. */
+export function trackCourseEvent(event: "view" | "click", courseId: string, techId?: string, projectCode?: string) {
+  return api.post("/course-events", { event, courseId, techId, projectCode }).catch(() => {});
 }

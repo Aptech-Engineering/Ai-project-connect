@@ -324,9 +324,18 @@ $r = call('POST', "/api/staff/ideas/{$walkId}/payments/centre", ['as' => 'admin'
 check('cannot record a second fee → 409', $r['status'] === 409);
 $app3 = call('GET', '/api/applications/draft?token=' . ($wq['resume'] ?? ''))['body'];
 check('client opens walk-in link: prefilled + paid', ($app3['fields']['name'] ?? '') === 'Mama Nkechi' && $app3['payment']['status'] === 'PAID' && $app3['wallet'][1]['label'] === 'Paid at the centre', $app3);
+$r = call('POST', "/api/staff/ideas/{$walkId}/resume-link", ['as' => 'tunde']);
+check('lead cannot resend the application link → 403', $r['status'] === 403);
+$r = call('POST', "/api/staff/ideas/{$walkId}/resume-link", ['as' => 'admin']);
+parse_str((string) parse_url($r['body']['devLink'] ?? '', PHP_URL_QUERY), $wq2);
+check('admin resends the application link (masked recipient)', $r['status'] === 200 && str_contains((string) ($r['body']['sentTo'] ?? ''), '•••') && strlen($wq2['resume'] ?? '') === 64 && $wq2['resume'] !== ($wq['resume'] ?? ''), $r['body']);
+check('resent link opens the same draft; the old one still works', call('GET', '/api/applications/draft?token=' . $wq2['resume'])['body']['ref'] === $walkRef && call('GET', '/api/applications/draft?token=' . $wq['resume'])['status'] === 200);
+check('resend emails + SMSes the client again', countSubject('Continue your application') >= 4 && count(array_filter(notifications(), static fn ($n) => $n['channel'] === 'sms' && $n['to'] === '+2348031112222')) >= 2);
 $r = call('POST', '/api/applications/draft', ['json' => ['token' => $wq['resume']] + array_diff_key($complete, ['name' => 1, 'title' => 1, 'category' => 1])]);
 $r = call('POST', '/api/applications/submit', ['json' => ['token' => $wq['resume']]]);
 check('walk-in client completes and submits', $r['status'] === 200 && $r['body']['status'] === 'NEW', $r['body']);
+$r = call('POST', "/api/staff/ideas/{$walkId}/resume-link", ['as' => 'admin']);
+check('cannot resend a link for a submitted application → 409', $r['status'] === 409, $r['body']);
 
 /* ================= 7. Approve paid idea → client portal wallet ================= */
 $mechanic = ideaByRef('IDEA-4QX7M');

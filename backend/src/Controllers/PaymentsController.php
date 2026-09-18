@@ -14,6 +14,7 @@ use App\Core\Request;
 use App\Core\Response;
 use App\Core\Validator;
 use App\Support\Ideas;
+use App\Support\Links;
 use App\Support\Paystack;
 use App\Support\Presenter;
 use App\Support\Wallet;
@@ -42,7 +43,7 @@ final class PaymentsController
             $outcome = $payment !== null ? 'pending' : 'failed';
         }
         $ref = $payment ? (string) Database::value('SELECT ref FROM ideas WHERE id = ?', [(int) $payment['idea_id']]) : null;
-        Response::redirect(Wallet::frontendUrl() . '/apply?' . http_build_query(array_filter(['ref' => $ref, 'payment' => $outcome, 'reference' => $payment ? $reference : null])));
+        Response::redirect(Links::applyPayment($ref, $outcome, $payment ? $reference : null));
     }
 
     /** Paystack webhook: HMAC-SHA512 signed, no CSRF header, idempotent. */
@@ -320,6 +321,31 @@ final class PaymentsController
             $response['devLink'] = Wallet::resumeLink($token);
         }
         Response::json($response, 201);
+    }
+
+    /**
+     * Sends the client a fresh "continue your application" link for a draft.
+     * Staff can't read the old one (only its hash is stored), so this issues a new token.
+     */
+    public static function resendResumeLink(Request $r): void
+    {
+        $user = Auth::requireStaff(['admin']);
+        $idea = IdeasController::find((int) $r->params['id']);
+        if ($idea['status'] !== 'DRAFT') {
+            throw new HttpError(409, 'This application has already been submitted, so there is nothing to continue.');
+        }
+        // Limited per application, not per IP: a whole office shares one address.
+        RateLimiter::hit('resume-link:idea:' . $idea['id'], 5, 3600);
+
+        $token = Wallet::issueToken((int) $idea['id']);
+        ApplicationsController::sendResumeEmail($idea, $token, $idea['source'] === 'walk_in', true);
+        Activity::staff($user, "Sent {$idea['email']} a new link to continue application {$idea['ref']}");
+
+        $response = ['sentTo' => Presenter::maskEmail((string) $idea['email']), 'idea' => Presenter::idea(IdeasController::find((int) $idea['id']))];
+        if (Config::get('otp.expose_in_response') && !Config::isProduction()) {
+            $response['devLink'] = Wallet::resumeLink($token);
+        }
+        Response::json($response);
     }
 
     private static function item(array $p): array

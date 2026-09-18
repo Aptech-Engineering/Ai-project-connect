@@ -261,6 +261,6 @@ final class QuotesController
 
     private static function link(string $ref, string $token): string
     {
-        return rtrim((string) Config::get('app.url'), '/') . '/quote?ref=' . rawurlencode($ref) . '&token=' . rawurlencode($token);
+        return \App\Support\Links::quote($ref, $token);
     }
 }

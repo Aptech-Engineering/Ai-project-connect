@@ -118,6 +118,7 @@ return static function (Router $r): void {
     $r->post('/api/staff/quotes/{id}/withdraw', [Quotes::class, 'withdraw']);
     $r->post('/api/staff/ideas/{id}/payments/centre', [Payments::class, 'recordAtCentre']);
     $r->post('/api/staff/walk-ins', [Payments::class, 'startWalkIn']);
+    $r->post('/api/staff/ideas/{id}/resume-link', [Payments::class, 'resendResumeLink']);
 
     $r->get('/api/staff/payments', [Payments::class, 'index']);
     $r->post('/api/staff/payments/{id}/confirm', [Payments::class, 'confirm']);

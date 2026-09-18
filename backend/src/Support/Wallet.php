@@ -60,13 +60,13 @@ final class Wallet
 
     public static function money(int $kobo, string $currency = 'NGN'): string
     {
-        $symbol = $currency === 'NGN' ? '₦' : $currency . ' ';
+        $symbol = $currency === 'NGN' ? "\u{20A6}" : $currency . ' ';
         return $symbol . number_format($kobo / 100, $kobo % 100 === 0 ? 0 : 2);
     }
 
     public static function frontendUrl(): string
     {
-        return rtrim((string) (Config::get('app.frontend_url') ?: Config::get('app.url')), '/');
+        return Links::frontend();
     }
 
     /* ---------------- resume links ---------------- */
@@ -80,7 +80,7 @@ final class Wallet
 
     public static function resumeLink(string $token): string
     {
-        return self::frontendUrl() . '/apply?resume=' . rawurlencode($token);
+        return Links::resume($token);
     }
 
     /** @return array<string, mixed> the idea for a resume token (404 if unknown) */

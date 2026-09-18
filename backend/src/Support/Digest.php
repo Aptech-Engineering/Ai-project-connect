@@ -46,13 +46,13 @@ final class Digest
         $lines[] = '';
         $lines[] = $updates ? 'This week:' : 'No new updates this week — your team is heads-down building.';
         foreach ($updates as $u) {
-            $lines[] = '• ' . date('D j M', (int) strtotime($u['at'])) . ' — ' . $u['title'];
+            $lines[] = "\u{2022} " . date('D j M', (int) strtotime($u['at'])) . " \u{2014} " . $u['title'];
         }
         if ($milestones) {
             $lines[] = '';
             $lines[] = 'Coming up:';
             foreach ($milestones as $m) {
-                $lines[] = '• ' . $m['title'] . ' — due ' . date('j M', (int) strtotime($m['due_date'])) . ($m['needs_client_approval'] ? ' (needs your approval)' : '');
+                $lines[] = "\u{2022} " . $m['title'] . " \u{2014} due " . date('j M', (int) strtotime($m['due_date'])) . ($m['needs_client_approval'] ? ' (needs your approval)' : '');
             }
         }
         if ($decisions) {
@@ -64,7 +64,7 @@ final class Digest
             $lines[] = "You have {$unread} new message" . ((int) $unread === 1 ? '' : 's') . ' from your team.';
         }
         $lines[] = '';
-        $lines[] = "Sign in with your Project ID {$project['code']} at " . rtrim((string) Config::get('app.url'), '/') . ' to see everything.';
+        $lines[] = "Sign in with your Project ID {$project['code']} at " . Links::portal() . ' to see everything.';
         $lines[] = 'You can turn off these weekly emails in your portal.';
 
         return [

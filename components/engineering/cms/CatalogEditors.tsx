@@ -1,11 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { BadgePercent, CalendarDays, Copy, Eye, EyeOff, GraduationCap, Pencil, Plus, Save, Trash2, X } from "lucide-react";
+import { BadgePercent, CalendarDays, Copy, Eye, EyeOff, GraduationCap, Loader2, Pencil, Plus, Save, Trash2, X } from "lucide-react";
 import StoredImage from "../../StoredImage";
 import { Card, Field, ImagePicker, TextArea, TextInput, Toggle, inputClass } from "./fields";
-import { CURRENCIES, deleteCourse, deleteTechnology, discountedPrice, formatPrice, saveCourse, saveTechnology, slugify, useCatalog } from "@/lib/catalog";
+import { CURRENCIES, deleteCourse, deleteTechnology, discountedPrice, formatPrice, saveCourse, saveTechnology, slugify, useAdminCatalog } from "@/lib/catalog";
+import { errorMessage } from "@/lib/api";
 import { cn, formatDate } from "@/lib/format";
 import type { Course, Technology } from "@/lib/types";
 import type { Notify } from "../../PortalApp";
@@ -18,15 +19,44 @@ function blankCourse(): Course {
   return { id: "", title: "", duration: "8 weeks", format: "Hybrid · Weekends", nextStart: d.toISOString(), price: 0, currency: "NGN", published: false };
 }
 
+const startDate = (c: Course) => (c.nextStart ? c.nextStart.slice(0, 10) : "");
+
 export function CoursesEditor({ notify }: { notify: Notify }) {
-  const { courseList, technologyList } = useCatalog();
+  const { courseList, technologyList } = useAdminCatalog();
   const [editing, setEditing] = useState<Course | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  /** The course id we are talking to the server about, so its row can wait. */
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const togglePublished = async (c: Course) => {
+    setBusyId(c.id);
+    try {
+      await saveCourse({ ...c, published: !c.published });
+      notify(c.published ? `${c.title} hidden from the site.` : `${c.title} is now live.`, "info");
+    } catch (e) {
+      notify(errorMessage(e), "info");
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const remove = async (c: Course) => {
+    setBusyId(c.id);
+    try {
+      await deleteCourse(c.id);
+      setConfirmDelete(null);
+      notify(`${c.title} deleted.`, "info");
+    } catch (e) {
+      notify(errorMessage(e), "info");
+    } finally {
+      setBusyId(null);
+    }
+  };
 
   return (
     <Card
       title="Courses & pricing"
-      description="Changes to courses are saved immediately."
+      description="Changes to courses are saved on the server straight away."
       action={
         <button onClick={() => setEditing(blankCourse())} className="flex items-center gap-1.5 rounded-full bg-brand px-4 py-2 text-sm font-bold text-white hover:bg-brand-600">
           <Plus className="size-4" /> Add course
@@ -36,8 +66,9 @@ export function CoursesEditor({ notify }: { notify: Notify }) {
       <ul className="space-y-2.5">
         {courseList.map((c) => {
           const techs = technologyList.filter((t) => t.courseId === c.id);
+          const busy = busyId === c.id;
           return (
-            <motion.li key={c.id} layout className="flex flex-col gap-3 rounded-xl border border-line p-3 sm:flex-row sm:items-center">
+            <motion.li key={c.id} layout className={cn("flex flex-col gap-3 rounded-xl border border-line p-3 sm:flex-row sm:items-center", busy && "opacity-60")}>
               <div className="grid h-16 w-24 shrink-0 place-items-center overflow-hidden rounded-lg bg-navy">
                 {c.flierId ? <StoredImage id={c.flierId} alt="" className="size-full object-cover" /> : <GraduationCap className="size-6 text-brand" />}
               </div>
@@ -64,38 +95,26 @@ export function CoursesEditor({ notify }: { notify: Notify }) {
                     </span>
                   ) : null}
                   <span className="flex items-center gap-1">
-                    <CalendarDays className="size-3" /> {formatDate(c.nextStart)}
+                    <CalendarDays className="size-3" /> {c.nextStart ? formatDate(c.nextStart) : "No start date yet"}
                   </span>
                   <span>{c.duration}</span>
                   {techs.length > 0 && <span>Linked: {techs.map((t) => t.name).join(", ")}</span>}
                 </p>
               </div>
               <div className="flex shrink-0 items-center gap-1">
-                <IconButton
-                  label={c.published ? "Unpublish" : "Publish"}
-                  onClick={() => {
-                    saveCourse({ ...c, published: !c.published });
-                    notify(c.published ? `${c.title} hidden from the site.` : `${c.title} is now live.`, "info");
-                  }}
-                >
+                {busy && <Loader2 className="size-4 animate-spin text-brand" />}
+                <IconButton label={c.published ? "Unpublish" : "Publish"} disabled={busy} onClick={() => void togglePublished(c)}>
                   {c.published ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
                 </IconButton>
-                <IconButton label="Duplicate" onClick={() => setEditing({ ...c, id: "", title: `${c.title} (copy)`, published: false })}>
+                <IconButton label="Duplicate" disabled={busy} onClick={() => setEditing({ ...c, id: "", title: `${c.title} (copy)`, published: false })}>
                   <Copy className="size-4" />
                 </IconButton>
-                <IconButton label="Edit" onClick={() => setEditing(c)}>
+                <IconButton label="Edit" disabled={busy} onClick={() => setEditing(c)}>
                   <Pencil className="size-4" />
                 </IconButton>
                 {confirmDelete === c.id ? (
                   <span className="flex items-center gap-1">
-                    <button
-                      onClick={() => {
-                        deleteCourse(c.id);
-                        setConfirmDelete(null);
-                        notify(`${c.title} deleted.`, "info");
-                      }}
-                      className="rounded-lg bg-danger px-2.5 py-1.5 text-xs font-bold text-white"
-                    >
+                    <button onClick={() => void remove(c)} disabled={busy} className="rounded-lg bg-danger px-2.5 py-1.5 text-xs font-bold text-white disabled:opacity-50">
                       Delete
                     </button>
                     <IconButton label="Cancel" onClick={() => setConfirmDelete(null)}>
@@ -103,7 +122,7 @@ export function CoursesEditor({ notify }: { notify: Notify }) {
                     </IconButton>
                   </span>
                 ) : (
-                  <IconButton label="Delete" danger onClick={() => setConfirmDelete(c.id)}>
+                  <IconButton label="Delete" danger disabled={busy} onClick={() => setConfirmDelete(c.id)}>
                     <Trash2 className="size-4" />
                   </IconButton>
                 )}
@@ -119,16 +138,7 @@ export function CoursesEditor({ notify }: { notify: Notify }) {
           <CourseForm
             initial={editing}
             onCancel={() => setEditing(null)}
-            onSave={(course) => {
-              const isNew = !course.id;
-              let id = course.id;
-              if (isNew) {
-                const base = slugify(course.title);
-                id = base;
-                let n = 2;
-                while (courseList.some((c) => c.id === id)) id = `${base}-${n++}`;
-              }
-              saveCourse({ ...course, id });
+            onSaved={(course, isNew) => {
               setEditing(null);
               notify(isNew ? `${course.title} added${course.published ? " and published" : " as a draft"}.` : `${course.title} saved.`);
             }}
@@ -139,25 +149,41 @@ export function CoursesEditor({ notify }: { notify: Notify }) {
   );
 }
 
-function CourseForm({ initial, onSave, onCancel }: { initial: Course; onSave: (c: Course) => void; onCancel: () => void }) {
+function CourseForm({ initial, onSaved, onCancel }: { initial: Course; onSaved: (c: Course, isNew: boolean) => void; onCancel: () => void }) {
   const [c, setC] = useState<Course>(initial);
   const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
   const set = (patch: Partial<Course>) => setC((x) => ({ ...x, ...patch }));
 
-  const submit = (e: React.FormEvent) => {
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (saving) return;
     if (c.title.trim().length < 3) return setError("Give the course a title.");
     if (!Number.isFinite(c.price) || c.price < 0) return setError("Enter a valid price.");
     if (c.discountPercent != null && (c.discountPercent < 0 || c.discountPercent > 100)) return setError("Discount must be between 0 and 100%.");
     if (c.enrolUrl && !/^https?:\/\/\S+\.\S+/.test(c.enrolUrl)) return setError("Enrolment link must start with https://");
-    onSave({
+
+    const isNew = !c.id;
+    const course: Course = {
       ...c,
+      // A new course still needs a readable id; the server makes it unique.
+      id: c.id || slugify(c.title),
       title: c.title.trim(),
       discountPercent: c.discountPercent || undefined,
       discountCode: c.discountCode?.trim() || undefined,
       enrolUrl: c.enrolUrl?.trim() || undefined,
       description: c.description?.trim() || undefined,
-    });
+    };
+    setError("");
+    setSaving(true);
+    try {
+      const saved = await saveCourse(course, isNew);
+      onSaved(saved, isNew);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -216,7 +242,7 @@ function CourseForm({ initial, onSave, onCancel }: { initial: Course; onSave: (c
         <input
           id="course-start"
           type="date"
-          value={c.nextStart.slice(0, 10)}
+          value={startDate(c)}
           onChange={(e) => e.target.value && set({ nextStart: new Date(`${e.target.value}T09:30:00`).toISOString() })}
           className={cn(inputClass, "h-11")}
         />
@@ -224,8 +250,11 @@ function CourseForm({ initial, onSave, onCancel }: { initial: Course; onSave: (c
       <TextInput label="Online enrolment / payment link (optional)" value={c.enrolUrl ?? ""} onChange={(v) => set({ enrolUrl: v })} placeholder="https://…" />
       <Toggle label="Published" hint="Draft courses are hidden from the site and client portal." checked={c.published} onChange={(v) => set({ published: v })} />
 
+      <p aria-live="polite" role="status" className="sr-only">
+        {saving ? "Saving the course…" : error}
+      </p>
       {error && <p className="rounded-xl bg-danger-soft px-3 py-2 text-sm font-bold text-danger">{error}</p>}
-      <FormActions onCancel={onCancel} />
+      <FormActions onCancel={onCancel} saving={saving} />
     </form>
   );
 }
@@ -237,14 +266,29 @@ function blankTech(): Technology {
 }
 
 export function TechnologiesEditor({ notify }: { notify: Notify }) {
-  const { technologyList, courses } = useCatalog();
+  const { courseList, technologyList } = useAdminCatalog();
+  const courses = useMemo(() => Object.fromEntries(courseList.map((c) => [c.id, c])) as Record<string, Course | undefined>, [courseList]);
   const [editing, setEditing] = useState<Technology | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const remove = async (t: Technology) => {
+    setBusyId(t.id);
+    try {
+      await deleteTechnology(t.id);
+      setConfirmDelete(null);
+      notify(`${t.name} deleted. It's hidden on projects that used it.`, "info");
+    } catch (e) {
+      notify(errorMessage(e), "info");
+    } finally {
+      setBusyId(null);
+    }
+  };
 
   return (
     <Card
       title="Technologies"
-      description="Engineers tag projects with these. Clients see the plain-language description and a “Learn this” link to the linked course. Saved immediately."
+      description="Engineers tag projects with these. Clients see the plain-language description and a “Learn this” link to the linked course. Saved on the server straight away."
       action={
         <button onClick={() => setEditing(blankTech())} className="flex items-center gap-1.5 rounded-full bg-brand px-4 py-2 text-sm font-bold text-white hover:bg-brand-600">
           <Plus className="size-4" /> Add technology
@@ -254,8 +298,9 @@ export function TechnologiesEditor({ notify }: { notify: Notify }) {
       <ul className="grid gap-2.5 md:grid-cols-2">
         {technologyList.map((t) => {
           const course = courses[t.courseId];
+          const busy = busyId === t.id;
           return (
-            <motion.li key={t.id} layout className="flex items-start gap-3 rounded-xl border border-line p-3">
+            <motion.li key={t.id} layout className={cn("flex items-start gap-3 rounded-xl border border-line p-3", busy && "opacity-60")}>
               <span className="grid size-10 shrink-0 place-items-center rounded-lg bg-navy font-display text-xs font-bold" style={{ color: t.color }}>
                 {t.mark}
               </span>
@@ -267,23 +312,20 @@ export function TechnologiesEditor({ notify }: { notify: Notify }) {
                 <p className={cn("mt-1 text-xs font-bold", course ? "text-teal-700" : "text-brand-700")}>{course ? `Course: ${course.title}` : "No course linked"}</p>
               </div>
               <div className="flex shrink-0 flex-col items-center">
-                <IconButton label="Edit" onClick={() => setEditing(t)}>
+                <IconButton label="Edit" disabled={busy} onClick={() => setEditing(t)}>
                   <Pencil className="size-4" />
                 </IconButton>
                 {confirmDelete === t.id ? (
                   <button
-                    onClick={() => {
-                      deleteTechnology(t.id);
-                      setConfirmDelete(null);
-                      notify(`${t.name} deleted. It's hidden on projects that used it.`, "info");
-                    }}
+                    onClick={() => void remove(t)}
                     onBlur={() => setConfirmDelete(null)}
-                    className="rounded-lg bg-danger px-2 py-1 text-[11px] font-bold text-white"
+                    disabled={busy}
+                    className="rounded-lg bg-danger px-2 py-1 text-[11px] font-bold text-white disabled:opacity-50"
                   >
                     Delete?
                   </button>
                 ) : (
-                  <IconButton label="Delete" danger onClick={() => setConfirmDelete(t.id)}>
+                  <IconButton label="Delete" danger disabled={busy} onClick={() => setConfirmDelete(t.id)}>
                     <Trash2 className="size-4" />
                   </IconButton>
                 )}
@@ -291,23 +333,16 @@ export function TechnologiesEditor({ notify }: { notify: Notify }) {
             </motion.li>
           );
         })}
+        {technologyList.length === 0 && <li className="rounded-xl border border-dashed border-line py-10 text-center text-sm text-muted md:col-span-2">No technologies yet.</li>}
       </ul>
 
       <Drawer open={Boolean(editing)} title={editing?.id ? "Edit technology" : "New technology"} onClose={() => setEditing(null)}>
         {editing && (
           <TechForm
             initial={editing}
+            courses={courseList}
             onCancel={() => setEditing(null)}
-            onSave={(tech) => {
-              const isNew = !tech.id;
-              let id = tech.id;
-              if (isNew) {
-                const base = slugify(tech.name);
-                id = base;
-                let n = 2;
-                while (technologyList.some((x) => x.id === id)) id = `${base}-${n++}`;
-              }
-              saveTechnology({ ...tech, id });
+            onSaved={(tech, isNew) => {
               setEditing(null);
               notify(isNew ? `${tech.name} added.` : `${tech.name} saved.`);
             }}
@@ -318,17 +353,36 @@ export function TechnologiesEditor({ notify }: { notify: Notify }) {
   );
 }
 
-function TechForm({ initial, onSave, onCancel }: { initial: Technology; onSave: (t: Technology) => void; onCancel: () => void }) {
-  const { courseList } = useCatalog();
+function TechForm({ initial, courses, onSaved, onCancel }: { initial: Technology; courses: Course[]; onSaved: (t: Technology, isNew: boolean) => void; onCancel: () => void }) {
   const [t, setT] = useState<Technology>(initial);
   const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
   const set = (patch: Partial<Technology>) => setT((x) => ({ ...x, ...patch }));
 
-  const submit = (e: React.FormEvent) => {
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (saving) return;
     if (t.name.trim().length < 1) return setError("Enter the technology name.");
     if (t.plain.trim().length < 10) return setError("Add a plain-language description clients will understand.");
-    onSave({ ...t, name: t.name.trim(), plain: t.plain.trim(), mark: (t.mark.trim() || t.name.trim().slice(0, 2)).slice(0, 3) });
+
+    const isNew = !t.id;
+    const tech: Technology = {
+      ...t,
+      id: t.id || slugify(t.name),
+      name: t.name.trim(),
+      plain: t.plain.trim(),
+      mark: (t.mark.trim() || t.name.trim().slice(0, 2)).slice(0, 3),
+    };
+    setError("");
+    setSaving(true);
+    try {
+      const saved = await saveTechnology(tech, isNew);
+      onSaved(saved, isNew);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -350,7 +404,7 @@ function TechForm({ initial, onSave, onCancel }: { initial: Technology; onSave: 
       <Field label="Linked course (“Learn this”)" id="tech-course">
         <select id="tech-course" value={t.courseId} onChange={(e) => set({ courseId: e.target.value })} className={cn(inputClass, "h-11")}>
           <option value="">No course</option>
-          {courseList.map((c) => (
+          {courses.map((c) => (
             <option key={c.id} value={c.id}>
               {c.title}
               {c.published ? "" : " (draft)"}
@@ -358,30 +412,40 @@ function TechForm({ initial, onSave, onCancel }: { initial: Technology; onSave: 
           ))}
         </select>
       </Field>
+      <p aria-live="polite" role="status" className="sr-only">
+        {saving ? "Saving the technology…" : error}
+      </p>
       {error && <p className="rounded-xl bg-danger-soft px-3 py-2 text-sm font-bold text-danger">{error}</p>}
-      <FormActions onCancel={onCancel} />
+      <FormActions onCancel={onCancel} saving={saving} />
     </form>
   );
 }
 
 /* ---------------- shared ---------------- */
 
-function IconButton({ label, onClick, children, danger }: { label: string; onClick: () => void; children: React.ReactNode; danger?: boolean }) {
+function IconButton({ label, onClick, children, danger, disabled }: { label: string; onClick: () => void; children: React.ReactNode; danger?: boolean; disabled?: boolean }) {
   return (
-    <button type="button" onClick={onClick} aria-label={label} title={label} className={cn("rounded-lg p-2 text-muted transition", danger ? "hover:bg-danger-soft hover:text-danger" : "hover:bg-mist hover:text-navy")}>
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      aria-label={label}
+      title={label}
+      className={cn("rounded-lg p-2 text-muted transition disabled:opacity-40", danger ? "hover:bg-danger-soft hover:text-danger" : "hover:bg-mist hover:text-navy")}
+    >
       {children}
     </button>
   );
 }
 
-function FormActions({ onCancel }: { onCancel: () => void }) {
+function FormActions({ onCancel, saving }: { onCancel: () => void; saving: boolean }) {
   return (
     <div className="sticky bottom-0 -mx-5 flex gap-2 border-t border-line bg-white px-5 pt-4 sm:-mx-6 sm:px-6">
-      <button type="button" onClick={onCancel} className="h-11 flex-1 rounded-xl border border-line font-bold text-muted">
+      <button type="button" onClick={onCancel} disabled={saving} className="h-11 flex-1 rounded-xl border border-line font-bold text-muted disabled:opacity-50">
         Cancel
       </button>
-      <button className="flex h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-navy font-bold text-white hover:bg-navy-700">
-        <Save className="size-4" /> Save
+      <button disabled={saving} className="flex h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-navy font-bold text-white hover:bg-navy-700 disabled:opacity-60">
+        {saving ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />} {saving ? "Saving…" : "Save"}
       </button>
     </div>
   );

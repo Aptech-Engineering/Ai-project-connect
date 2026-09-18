@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "serve": "node scripts/serve-static.mjs out 3000"
   },
   "dependencies": {
     "framer-motion": "^13.3.0",

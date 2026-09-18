@@ -4,47 +4,79 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
-import { AlertCircle, ArrowRight, CalendarClock, CheckCircle2, Clock, FileText, Loader2, ShieldCheck, UserRound, XCircle } from "lucide-react";
+import { AlertCircle, ArrowRight, CalendarClock, CheckCircle2, Clock, Download, FileText, Loader2, Mail, ShieldCheck, UserRound, XCircle } from "lucide-react";
 import Logo from "./Logo";
-import { acceptQuote, declineQuote, openQuote, type QuoteLookup } from "@/lib/flows";
+import { acceptQuote, declineQuote, openQuote, type QuoteView as Quote } from "@/lib/flows";
+import { errorMessage } from "@/lib/api";
 import { formatPrice } from "@/lib/catalog";
-import { openStoredFile } from "@/lib/files";
+import { openRemoteFile } from "@/lib/files";
 import { cn, formatDate } from "@/lib/format";
+
+/** The API hands back paths that already start with /api; openRemoteFile adds the base itself. */
+const apiPath = (url: string) => (url.startsWith("/api/") ? url.slice(4) : url);
+
+type Result = { kind: "accepted"; registered: boolean; sentTo: string } | { kind: "declined" };
 
 /** Private page the client opens from the quote email: review, accept online or decline. */
 export default function QuotePage() {
   const params = useSearchParams();
   const ref = params.get("ref") ?? "";
   const token = params.get("token") ?? "";
-  const [lookup, setLookup] = useState<QuoteLookup | null>(null);
+  const [quote, setQuote] = useState<Quote | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
   const [mode, setMode] = useState<"review" | "decline">("review");
   const [name, setName] = useState("");
   const [agree, setAgree] = useState(false);
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [result, setResult] = useState<{ kind: "accepted"; code: string; sentTo: string } | { kind: "declined" } | null>(null);
+  const [result, setResult] = useState<Result | null>(null);
 
-  useEffect(() => setLookup(openQuote(ref, token)), [ref, token]);
+  useEffect(() => {
+    let live = true;
+    setLoading(true);
+    setLoadError("");
+    openQuote(ref, token)
+      .then((q) => live && setQuote(q))
+      .catch((e) => live && setLoadError(errorMessage(e)))
+      .finally(() => live && setLoading(false));
+    return () => {
+      live = false;
+    };
+  }, [ref, token]);
 
-  const accept = (e: React.FormEvent) => {
+  const accept = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (name.trim().length < 2 || !agree) return;
+    if (busy || name.trim().length < 2 || !agree) return;
     setBusy(true);
-    window.setTimeout(() => {
-      const res = acceptQuote(ref, token, name.trim());
+    setError("");
+    try {
+      const res = await acceptQuote(ref, token, name.trim());
+      setResult({ kind: "accepted", registered: res.projectRegistered, sentTo: res.sentTo });
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
       setBusy(false);
-      if (!res.ok) return setError(res.error);
-      setResult({ kind: "accepted", code: res.code, sentTo: res.sentTo });
-    }, 900);
+    }
   };
 
-  const decline = (e: React.FormEvent) => {
+  const decline = async (e: React.FormEvent) => {
     e.preventDefault();
-    const res = declineQuote(ref, token, reason.trim() || undefined);
-    if (!res.ok) return setError(res.error);
-    setResult({ kind: "declined" });
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      await declineQuote(ref, token, reason.trim() || undefined);
+      setResult({ kind: "declined" });
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
   };
+
+  const open = quote && quote.status === "sent" && !quote.expired;
 
   return (
     <div className="min-h-screen bg-mist">
@@ -59,38 +91,56 @@ export default function QuotePage() {
         </div>
       </header>
 
-      <main className="container-page max-w-3xl py-10 sm:py-14">
-        {lookup === null ? (
+      <main className="container-page max-w-3xl py-10 sm:py-14" aria-live="polite">
+        {loading ? (
           <div className="grid h-64 place-items-center">
             <Loader2 className="size-8 animate-spin text-brand" />
+            <span className="sr-only">Opening your proposal</span>
           </div>
-        ) : !lookup.ok ? (
-          <Message icon={<AlertCircle className="size-10 text-danger" />} title="We couldn't open this proposal" text={lookup.error} />
+        ) : !quote ? (
+          <Message icon={<AlertCircle className="size-10 text-danger" />} title="We couldn't open this proposal" text={loadError || "This link is invalid or has been replaced."} />
         ) : result?.kind === "accepted" ? (
           <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} className="rounded-3xl bg-white p-8 text-center shadow-xl shadow-navy/5">
-            <motion.span initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ type: "spring", stiffness: 260, damping: 14 }} className="mx-auto grid size-20 place-items-center rounded-full bg-teal-soft">
+            <motion.span
+              initial={{ scale: 0 }}
+              animate={{ scale: 1 }}
+              transition={{ type: "spring", stiffness: 260, damping: 14 }}
+              className="mx-auto grid size-20 place-items-center rounded-full bg-teal-soft"
+            >
               <CheckCircle2 className="size-11 text-teal" />
             </motion.span>
             <h1 className="mt-5 font-display text-3xl font-bold">Welcome aboard!</h1>
-            <p className="mt-2 text-muted">
-              Your project <b className="text-navy">{lookup.idea.title}</b> is registered. We&apos;ve sent your Project ID to <b className="text-navy">{result.sentTo}</b> and by SMS.
-            </p>
-            <p className="mx-auto mt-5 max-w-sm rounded-xl bg-brand-soft px-4 py-3 text-sm text-brand-700">
-              Demo: your Project ID is <b className="font-mono">{result.code}</b>
-            </p>
-            <Link href="/#track" className="mt-6 inline-flex h-12 items-center gap-2 rounded-xl bg-navy px-6 font-bold text-white hover:bg-navy-700">
-              Track your project <ArrowRight className="size-4" />
+            {result.registered ? (
+              <>
+                <p className="mt-2 text-muted">
+                  Your project <b className="text-navy">{quote.idea.title}</b> is registered and your project lead has been told.
+                </p>
+                <p className="mx-auto mt-5 flex max-w-md items-start gap-2 rounded-xl bg-brand-soft px-4 py-3 text-left text-sm text-brand-700">
+                  <Mail className="mt-0.5 size-4 shrink-0" />
+                  <span>
+                    Your Project ID is on its way to <b>{result.sentTo}</b> and by SMS. You&apos;ll need it to track the build, so keep the email safe — and check your
+                    spam folder if it hasn&apos;t arrived in a few minutes.
+                  </span>
+                </p>
+              </>
+            ) : (
+              <p className="mt-2 text-muted">
+                Thanks for accepting. We&apos;ve recorded it and our team will email <b className="text-navy">{result.sentTo}</b> with your Project ID shortly.
+              </p>
+            )}
+            <Link href="/#track" className="mt-6 inline-flex h-12 items-center gap-2 rounded-xl bg-navy px-6 font-bold text-white transition hover:bg-navy-700">
+              Go to the tracker <ArrowRight className="size-4" />
             </Link>
           </motion.div>
         ) : result?.kind === "declined" ? (
           <Message icon={<XCircle className="size-10 text-muted" />} title="Thanks for letting us know" text="Your team will be in touch to talk through options or a revised proposal." />
         ) : (
-          <QuoteView lookup={lookup}>
-            {lookup.quote.status !== "sent" || lookup.expired ? (
+          <QuoteCard quote={quote}>
+            {!open ? (
               <p className="rounded-2xl bg-mist px-4 py-3 text-sm text-muted">
-                {lookup.quote.status === "accepted"
+                {quote.status === "accepted"
                   ? "You've already accepted this proposal. Check your email for your Project ID."
-                  : lookup.expired
+                  : quote.expired
                     ? "This proposal has expired. Contact us for an updated quote."
                     : "This proposal is no longer open. Contact us for an updated quote."}
               </p>
@@ -99,49 +149,96 @@ export default function QuotePage() {
                 {mode === "review" ? (
                   <motion.form key="accept" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onSubmit={accept} className="space-y-4">
                     <label className="flex items-start gap-2.5 text-sm">
-                      <input type="checkbox" checked={agree} onChange={(e) => setAgree(e.target.checked)} className="mt-0.5 size-4 accent-[var(--color-brand)]" />
-                      I accept this proposal and price, and agree to the project terms (including NDA and IP ownership as discussed).
+                      <input type="checkbox" checked={agree} onChange={(e) => setAgree(e.target.checked)} className="mt-0.5 size-4 accent-[var(--color-brand)]" />I accept this
+                      proposal and price, and agree to the project terms (including NDA and IP ownership as discussed).
                     </label>
                     <div className="flex flex-col gap-2 sm:flex-row">
-                      <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Type your full name to accept" aria-label="Your full name" className="h-12 flex-1 rounded-xl border border-line px-4 text-sm outline-none focus:border-brand focus:ring-4 focus:ring-brand/15" />
-                      <button disabled={busy || name.trim().length < 2 || !agree} className="flex h-12 items-center justify-center gap-2 rounded-xl bg-brand px-6 font-bold text-white hover:bg-brand-600 disabled:opacity-40">
-                        {busy ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />} Accept proposal
+                      <label htmlFor="accept-name" className="sr-only">
+                        Your full name
+                      </label>
+                      <input
+                        id="accept-name"
+                        value={name}
+                        onChange={(e) => setName(e.target.value)}
+                        placeholder="Type your full name to accept"
+                        className="h-12 flex-1 rounded-xl border border-line px-4 text-sm outline-none focus:border-brand focus:ring-4 focus:ring-brand/15"
+                      />
+                      <button
+                        disabled={busy || name.trim().length < 2 || !agree}
+                        className="flex h-12 items-center justify-center gap-2 rounded-xl bg-brand px-6 font-bold text-white transition hover:bg-brand-600 disabled:opacity-40"
+                      >
+                        {busy ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />} {busy ? "Registering your project…" : "Accept proposal"}
                       </button>
                     </div>
-                    {error && <p className="text-sm font-bold text-danger">{error}</p>}
+                    {error && (
+                      <p role="alert" className="text-sm font-bold text-danger">
+                        {error}
+                      </p>
+                    )}
                     <button type="button" onClick={() => setMode("decline")} className="text-sm text-muted underline underline-offset-2 hover:text-navy">
                       Not right for you? Decline or ask for changes
                     </button>
                   </motion.form>
                 ) : (
                   <motion.form key="decline" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onSubmit={decline} className="space-y-3">
-                    <textarea value={reason} onChange={(e) => setReason(e.target.value)} rows={3} placeholder="Tell us what would work better (budget, scope, timing)…" aria-label="Reason" className="w-full resize-none rounded-xl border border-line p-3 text-sm outline-none focus:border-brand" />
+                    <label htmlFor="decline-reason" className="sr-only">
+                      What would work better
+                    </label>
+                    <textarea
+                      id="decline-reason"
+                      value={reason}
+                      onChange={(e) => setReason(e.target.value)}
+                      rows={3}
+                      placeholder="Tell us what would work better (budget, scope, timing)…"
+                      className="w-full resize-none rounded-xl border border-line p-3 text-sm outline-none focus:border-brand"
+                    />
+                    {error && (
+                      <p role="alert" className="text-sm font-bold text-danger">
+                        {error}
+                      </p>
+                    )}
                     <div className="flex gap-2">
-                      <button type="button" onClick={() => setMode("review")} className="h-11 flex-1 rounded-xl border border-line font-bold text-muted">
+                      <button type="button" onClick={() => setMode("review")} disabled={busy} className="h-11 flex-1 rounded-xl border border-line font-bold text-muted disabled:opacity-50">
                         Back
                       </button>
-                      <button className="h-11 flex-1 rounded-xl bg-navy font-bold text-white">Decline proposal</button>
+                      <button disabled={busy} className="flex h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-navy font-bold text-white disabled:opacity-50">
+                        {busy && <Loader2 className="size-4 animate-spin" />} Decline proposal
+                      </button>
                     </div>
                   </motion.form>
                 )}
               </AnimatePresence>
             )}
-          </QuoteView>
+          </QuoteCard>
         )}
       </main>
     </div>
   );
 }
 
-function QuoteView({ lookup, children }: { lookup: Extract<QuoteLookup, { ok: true }>; children: React.ReactNode }) {
-  const { idea, quote } = lookup;
+function QuoteCard({ quote, children }: { quote: Quote; children: React.ReactNode }) {
+  const { idea } = quote;
+  const [downloading, setDownloading] = useState(false);
+  const [proposalError, setProposalError] = useState("");
+
+  const download = async () => {
+    if (!quote.proposal || downloading) return;
+    setDownloading(true);
+    setProposalError("");
+    const ok = await openRemoteFile(apiPath(quote.proposal.url), quote.proposal.name, "download");
+    if (!ok) setProposalError("We couldn't download the proposal just now. Please try again, or reply to the email we sent you.");
+    setDownloading(false);
+  };
+
   return (
     <motion.article initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} className="overflow-hidden rounded-3xl bg-white shadow-xl shadow-navy/5">
       <div className="h-1.5 bg-gradient-to-r from-brand to-teal" />
       <div className="p-6 sm:p-8">
         <p className="text-xs font-bold uppercase tracking-[0.16em] text-brand-700">Proposal for {idea.name}</p>
         <h1 className="mt-1 font-display text-3xl font-bold">{idea.title}</h1>
-        <p className="mt-1 font-mono text-xs text-muted">{idea.ref}</p>
+        <p className="mt-1 font-mono text-xs text-muted">
+          {idea.ref} · {idea.emailMasked}
+        </p>
 
         <div className="mt-6 rounded-2xl bg-navy p-5 text-white">
           <p className="text-sm text-white/60">Total project price</p>
@@ -152,24 +249,32 @@ function QuoteView({ lookup, children }: { lookup: Extract<QuoteLookup, { ok: tr
 
         <dl className="mt-6 grid gap-3 sm:grid-cols-3">
           <Fact icon={<Clock className="size-4" />} label="Timeline" value={quote.timelineWeeks ? `About ${quote.timelineWeeks} weeks` : "To be agreed"} />
-          <Fact icon={<CalendarClock className="size-4" />} label="Target delivery" value={formatDate(quote.targetDate)} />
-          <Fact icon={<UserRound className="size-4" />} label="Your project lead" value={quote.leadName} />
+          <Fact icon={<CalendarClock className="size-4" />} label="Target delivery" value={quote.targetDate ? formatDate(quote.targetDate) : "To be agreed"} />
+          <Fact icon={<UserRound className="size-4" />} label="Your project lead" value={quote.leadName ?? "We'll confirm this shortly"} />
         </dl>
 
         {quote.proposal && (
-          <button onClick={() => openStoredFile(quote.proposal!.id, quote.proposal!.name, "view")} className="mt-5 flex w-full items-center gap-3 rounded-2xl border border-line p-3 text-left transition hover:border-navy/30">
-            <span className="grid size-10 place-items-center rounded-xl bg-danger-soft text-danger">
-              <FileText className="size-5" />
-            </span>
-            <span className="flex-1">
-              <span className="block text-sm font-bold">{quote.proposal.name}</span>
-              <span className="block text-xs text-muted">Full proposal document</span>
-            </span>
-            <ArrowRight className="size-4 text-muted" />
-          </button>
+          <>
+            <button
+              type="button"
+              onClick={download}
+              disabled={downloading}
+              className="mt-5 flex w-full items-center gap-3 rounded-2xl border border-line p-3 text-left transition hover:border-navy/30 disabled:opacity-60"
+            >
+              <span className="grid size-10 place-items-center rounded-xl bg-danger-soft text-danger">
+                {downloading ? <Loader2 className="size-5 animate-spin" /> : <FileText className="size-5" />}
+              </span>
+              <span className="flex-1">
+                <span className="block text-sm font-bold">{quote.proposal.name}</span>
+                <span className="block text-xs text-muted">Full proposal document · {quote.proposal.size}</span>
+              </span>
+              <Download className="size-4 text-muted" />
+            </button>
+            <p aria-live="polite">{proposalError && <span className="mt-2 block text-xs font-bold text-danger">{proposalError}</span>}</p>
+          </>
         )}
 
-        <p className={cn("mt-5 text-xs", lookup.expired ? "font-bold text-danger" : "text-muted")}>Valid until {formatDate(quote.validUntil)}</p>
+        <p className={cn("mt-5 text-xs", quote.expired ? "font-bold text-danger" : "text-muted")}>Valid until {formatDate(quote.validUntil)}</p>
         <div className="mt-6 border-t border-line pt-6">{children}</div>
       </div>
     </motion.article>

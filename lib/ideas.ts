@@ -1,105 +1,39 @@
 "use client";
 
-import { createCollection } from "./collection";
-import type { StoredFileMeta } from "./files";
+/**
+ * The idea inbox, backed by /api/staff/ideas.
+ *
+ * The server owns everything here: references, statuses, the commitment fee and the
+ * conversion into a project. This file only describes the JSON it sends back and wraps
+ * the four endpoints staff use. The public side of an application (drafts, paying the
+ * fee, submitting) lives in wallet.ts.
+ *
+ * Every idea carries its own money with it: `paymentStatus` and `payment` are the
+ * current commitment fee attempt, and `wallet` is the ledger shown to the client.
+ * wallet.ts has the helpers that read them.
+ */
+import { useMemo } from "react";
+import { api, query } from "./api";
+import { useApi } from "./remote";
+import { KEYS, refreshIdeas, refreshProjects } from "./store";
 
 export type IdeaStatus = "DRAFT" | "NEW" | "REVIEWING" | "QUOTE_SENT" | "ACCEPTED" | "DECLINED";
 
+/** Statuses staff can set. DRAFT belongs to the client, ACCEPTED to the convert endpoint. */
+export type IdeaStatusChange = "NEW" | "REVIEWING" | "QUOTE_SENT" | "DECLINED";
+
+/** How the application started: on the website, or at a centre with an admin. */
+export type IdeaSource = "online" | "walk_in";
+
+export type PaymentMethod = "paystack" | "manual";
+
+/** The status of one payment attempt. */
 export type PaymentStatus = "PENDING" | "AWAITING_CONFIRMATION" | "PAID" | "FAILED";
-export type RefundStatus = "PENDING" | "PROCESSING" | "REFUNDED";
 
-/** One attempt to pay the commitment fee. The latest non-failed attempt is the current one. */
-export interface IdeaPayment {
-  id: string;
-  method: "paystack" | "manual";
-  status: PaymentStatus;
-  amount: number;
-  currency: string;
-  reference: string;
-  createdAt: string;
-  paidAt?: string;
-  receiptNo?: string;
-  /** Manual transfer details from "I have sent the money". */
-  senderName?: string;
-  senderBank?: string;
-  transferDate?: string;
-  proof?: StoredFileMeta;
-  /** Recorded by staff for cash or transfer received at a centre. */
-  atCentre?: boolean;
-  note?: string;
-  confirmedBy?: string;
-  confirmedAt?: string;
-  failureReason?: string;
-  refund?: { status: RefundStatus; queuedAt: string; reason: string; reference?: string; note?: string; by?: string; completedAt?: string };
-}
+/** The fee status of the idea as a whole: the current attempt, or UNPAID when there is none. */
+export type FeeState = "UNPAID" | PaymentStatus;
 
-export interface RefundAccount {
-  name: string;
-  number: string;
-  bank: string;
-}
-
-export interface Quote {
-  id: string;
-  amount: number;
-  currency: string;
-  summary: string;
-  timelineWeeks?: number;
-  /** YYYY-MM-DD */
-  validUntil: string;
-  proposal?: StoredFileMeta;
-  leadName: string;
-  /** YYYY-MM-DD */
-  targetDate: string;
-  /** Secret for the client's private quote link (hashed on the real server). */
-  token: string;
-  status: "sent" | "accepted" | "declined" | "withdrawn";
-  sentAt: string;
-  sentBy: string;
-  respondedAt?: string;
-  acceptedName?: string;
-  clientNote?: string;
-}
-
-export interface Idea {
-  id: string;
-  ref: string;
-  submittedAt: string;
-  name: string;
-  email: string;
-  phone: string;
-  organisation?: string;
-  /** Display string, e.g. "Ibadan, Oyo, Nigeria". */
-  location: string;
-  country?: string;
-  state?: string;
-  title: string;
-  category: string;
-  platforms: string[];
-  problem: string;
-  targetUsers: string;
-  features: string;
-  budget: string;
-  timeline: string;
-  nda: boolean;
-  /** Optional PDF brief uploaded by the client. */
-  attachment?: StoredFileMeta;
-  status: IdeaStatus;
-  notes?: string;
-  projectCode?: string;
-  quote?: Quote;
-  /** Secret for the client's "continue your application" link (hashed on the real server). */
-  draftToken?: string;
-  lastSavedAt?: string;
-  /** Wizard step the client stopped on. */
-  draftStep?: number;
-  /** Set when an admin started the application for a walk-in client. */
-  startedBy?: string;
-  payments?: IdeaPayment[];
-  refundAccount?: RefundAccount;
-}
-
-export type IdeaInput = Omit<Idea, "id" | "ref" | "submittedAt" | "status" | "notes" | "projectCode" | "quote" | "draftToken" | "lastSavedAt" | "draftStep" | "startedBy" | "payments" | "refundAccount">;
+export type RefundStatus = "NONE" | "PENDING" | "PROCESSING" | "REFUNDED";
 
 export const IDEA_STATUSES: Record<IdeaStatus, { label: string; className: string }> = {
   DRAFT: { label: "Draft", className: "bg-mist text-muted" },
@@ -110,226 +44,214 @@ export const IDEA_STATUSES: Record<IdeaStatus, { label: string; className: strin
   DECLINED: { label: "Declined", className: "bg-line text-muted" },
 };
 
+/* ================= payments ================= */
 
-function daysAgo(n: number, hour = 10) {
-  const d = new Date();
-  d.setDate(d.getDate() - n);
-  d.setHours(hour, 15, 0, 0);
-  return d.toISOString();
+/** Proof of a bank transfer. `url` is only sent to staff. */
+export interface ProofFile {
+  name: string;
+  size: number;
+  type: string;
+  url?: string;
 }
 
-function paid(method: IdeaPayment["method"], days: number, reference: string, receiptNo: string, extra: Partial<IdeaPayment> = {}): IdeaPayment {
-  const at = daysAgo(days, 9);
-  return { id: `pay-${reference}`, method, status: "PAID", amount: 2000, currency: "NGN", reference, receiptNo, createdAt: at, paidAt: at, ...(method === "manual" ? { confirmedAt: at } : {}), ...extra };
+/** The "I have sent the money" details, for bank transfers only. */
+export interface ManualTransfer {
+  senderName: string | null;
+  senderBank: string | null;
+  /** What the client says they sent, which can be more than the fee. */
+  amountClaimed: number | null;
+  /** YYYY-MM-DD */
+  transferDate: string | null;
+  note: string | null;
+  proof: ProofFile | null;
 }
 
-const SEED: Idea[] = [
-  {
-    id: "i1",
-    ref: "IDEA-4QX7M",
-    submittedAt: daysAgo(0, 9),
-    name: "Bola Ogunleye",
-    email: "bola@mechanicnow.ng",
-    phone: "+234 803 555 0192",
-    organisation: "MechanicNow",
-    location: "Oyo, Nigeria",
-    country: "Nigeria",
-    state: "Oyo",
-    title: "MechanicNow",
-    category: "Logistics",
-    platforms: ["Android app", "Admin dashboard"],
-    problem: "When your car breaks down, finding a trusted mechanic nearby is hard and prices are unclear.",
-    targetUsers: "Car owners in Ibadan and Lagos, and independent mechanics.",
-    features: "Request a mechanic to your location, see price estimates upfront, rate mechanics, pay in the app.",
-    budget: "₦3M – ₦7M",
-    timeline: "3 – 6 months",
-    nda: true,
-    status: "NEW",
-    payments: [paid("paystack", 0, "PSK-7Q2M9XK4", "RCPT-2609-4QX7M")],
-  },
-  {
-    id: "i2",
-    ref: "IDEA-8JD2P",
-    submittedAt: daysAgo(2, 14),
-    name: "Amaka Nwachukwu",
-    email: "amaka@stylehub.africa",
-    phone: "+234 816 222 4471",
-    organisation: "StyleHub",
-    location: "Enugu, Nigeria",
-    country: "Nigeria",
-    state: "Enugu",
-    title: "StyleHub Tailors",
-    category: "E-commerce",
-    platforms: ["Website", "Android app"],
-    problem: "Customers can't easily order custom clothes online and tailors lose track of measurements.",
-    targetUsers: "Young professionals ordering native wear, and tailors managing orders.",
-    features: "Save body measurements, pick styles, track sewing progress, WhatsApp reminders.",
-    budget: "₦1M – ₦3M",
-    timeline: "1 – 3 months",
-    nda: false,
-    status: "REVIEWING",
-    notes: "Good fit for Flutter + Firebase. Book a call to confirm scope.",
-    payments: [paid("paystack", 2, "PSK-3HN8V2TD", "RCPT-2609-8JD2P")],
-  },
-  {
-    id: "i3",
-    ref: "IDEA-2VN9K",
-    submittedAt: daysAgo(6, 11),
-    name: "Yusuf Danjuma",
-    email: "yusuf@agrocold.com",
-    phone: "+234 902 777 1180",
-    location: "Kano, Nigeria",
-    country: "Nigeria",
-    state: "Kano",
-    title: "AgroCold Storage Booking",
-    category: "Agriculture",
-    platforms: ["Website"],
-    problem: "Farmers lose produce because they can't find or book cold storage space in time.",
-    targetUsers: "Tomato and pepper farmers, cold room owners.",
-    features: "See available cold rooms, book and pay per crate, SMS alerts before storage expires.",
-    budget: "₦3M – ₦7M",
-    timeline: "Flexible",
-    nda: true,
-    status: "QUOTE_SENT",
-    notes: "Proposal sent: React + Node.js + PostgreSQL, 14 weeks.",
-    payments: [paid("manual", 6, "TRF-2VN9K", "RCPT-2609-2VN9K", { senderName: "Yusuf Danjuma", senderBank: "GTBank", confirmedBy: "Aptech Dev Team" })],
-  },
-  {
-    id: "i4",
-    ref: "IDEA-6RW3H",
-    submittedAt: daysAgo(1, 16),
-    name: "Halima Bello",
-    email: "halima@mamaput.ng",
-    phone: "+234 809 314 2256",
-    location: "FCT, Nigeria",
-    country: "Nigeria",
-    state: "FCT",
-    title: "MamaPut Delivery",
-    category: "Marketplace",
-    platforms: ["Android app", "Website"],
-    problem: "Local food vendors can't take delivery orders, so office workers only get fast-food chains.",
-    targetUsers: "Office workers in Abuja and roadside food vendors.",
-    features: "Browse nearby vendors, order and pay, rider pickup, vendor daily sales summary.",
-    budget: "₦1M – ₦3M",
-    timeline: "1 – 3 months",
-    nda: false,
-    status: "NEW",
-    payments: [
-      {
-        id: "pay-i4",
-        method: "manual",
-        status: "AWAITING_CONFIRMATION",
-        amount: 2000,
-        currency: "NGN",
-        reference: "TRF-6RW3H",
-        createdAt: daysAgo(1, 16),
-        senderName: "Halima Bello",
-        senderBank: "Opay",
-        transferDate: daysAgo(1, 16).slice(0, 10),
-      },
-    ],
-    refundAccount: { name: "Halima Bello", number: "8093142256", bank: "Opay" },
-  },
-  {
-    id: "i5",
-    ref: "IDEA-9TB4C",
-    submittedAt: daysAgo(9, 12),
-    name: "Chidi Eze",
-    email: "chidi@betpredict.io",
-    phone: "+234 705 118 9043",
-    location: "Lagos, Nigeria",
-    country: "Nigeria",
-    state: "Lagos",
-    title: "BetPredict Tips",
-    category: "Other",
-    platforms: ["Website"],
-    problem: "Sports fans want paid betting tips delivered by SMS.",
-    targetUsers: "Sports bettors.",
-    features: "Paid tips subscription, SMS delivery, win-rate tracker.",
-    budget: "Under ₦1M",
-    timeline: "As soon as possible",
-    nda: false,
-    status: "DECLINED",
-    notes: "Outside what we build (gambling). Refund the commitment fee.",
-    payments: [
-      {
-        ...paid("paystack", 9, "PSK-9TB4CW1Z", "RCPT-2609-9TB4C"),
-        refund: { status: "PENDING", queuedAt: daysAgo(3, 11), reason: "Idea declined by the team" },
-      },
-    ],
-  },
-  {
-    id: "i6",
-    ref: "IDEA-5KP8S",
-    submittedAt: daysAgo(0, 8),
-    lastSavedAt: daysAgo(0, 8),
-    draftToken: "demo-draft-5kp8s",
-    draftStep: 3,
-    name: "Tobi Adeyemi",
-    email: "tobi@schoolpay.ng",
-    phone: "+234 813 660 7781",
-    location: "Ogun, Nigeria",
-    country: "Nigeria",
-    state: "Ogun",
-    title: "SchoolPay",
-    category: "Education",
-    platforms: ["Website", "Android app"],
-    problem: "Parents queue at banks to pay school fees and schools lose track of who has paid.",
-    targetUsers: "Private schools and parents in Abeokuta.",
-    features: "Pay fees online, instant receipts, reminders, bursar dashboard.",
-    budget: "₦3M – ₦7M",
-    timeline: "3 – 6 months",
-    nda: true,
-    status: "DRAFT",
-  },
-];
-
-const ideas = createCollection<Idea>("apc-demo-ideas-v2", SEED);
-
-export const useIdeas = () => ideas.useItems();
-
-export const readIdeas = () => ideas.read();
-
-export function findIdea(ref: string) {
-  return ideas.read().find((i) => i.ref === ref.trim().toUpperCase());
+/** Where a bank transfer is refunded to. */
+export interface RefundAccount {
+  accountName: string;
+  accountNumber: string;
+  bankName: string;
 }
 
-export function findIdeaById(id: string) {
-  return ideas.read().find((i) => i.id === id);
+export interface Refund {
+  status: RefundStatus;
+  reference: string | null;
+  note: string | null;
+  queuedAt: string | null;
+  /** When it was completed. */
+  at: string | null;
 }
 
-export function addIdea(idea: Idea) {
-  ideas.set((all) => [idea, ...all]);
+/**
+ * The commitment fee attempt that counts for an idea. The server always sends one:
+ * with no payment yet it is an empty shell with `status: "UNPAID"`.
+ * The fields at the bottom only come with a staff session.
+ */
+export interface IdeaPayment {
+  /** Staff only; the public application view leaves it out. */
+  id?: number | null;
+  status: FeeState;
+  method: PaymentMethod | null;
+  amount: number;
+  amountKobo: number;
+  currency: string;
+  reference: string | null;
+  receiptNo: string | null;
+  paidAt: string | null;
+  createdAt: string | null;
+  failureReason: string | null;
+  manual: ManualTransfer | null;
+  refundAccount: RefundAccount | null;
+  refund: Refund;
+  confirmedBy?: string | null;
+  confirmedAt?: string | null;
+  refundedBy?: string | null;
+  /** The admin who recorded a payment taken at a centre. */
+  recordedBy?: string | null;
+  paystackTransactionId?: number | null;
+  /** How Paystack was paid: card, bank, ussd… */
+  channel?: string | null;
 }
 
-export function randomRef() {
-  return `IDEA-${randomCode(5)}`;
+/**
+ * One line of the client's wallet: the fee itself, each payment and any refund.
+ * `status` is a FeeState, PaymentStatus or RefundStatus depending on `type`.
+ */
+export interface WalletEntry {
+  type: "fee" | "payment" | "refund";
+  label: string;
+  amount: number;
+  currency: string;
+  status: string;
+  reference: string | null;
+  at: string | null;
+  method?: PaymentMethod | null;
+  receiptNo?: string | null;
+  note?: string | null;
 }
 
-export function randomToken(bytes = 24) {
-  return Array.from(crypto.getRandomValues(new Uint8Array(bytes)), (b) => b.toString(16).padStart(2, "0")).join("");
+/* ================= ideas ================= */
+
+export interface Quote {
+  id: number;
+  amount: number;
+  currency: string;
+  summary: string;
+  timelineWeeks: number | null;
+  /** YYYY-MM-DD */
+  validUntil: string;
+  /** Sent, and past its date. */
+  expired: boolean;
+  status: "sent" | "accepted" | "declined" | "withdrawn";
+  leadName: string | null;
+  /** YYYY-MM-DD */
+  targetDate: string;
+  sentAt: string | null;
+  respondedAt: string | null;
+  acceptedName: string | null;
+  clientNote: string | null;
+  /** `size` is already human-readable here, e.g. "1.2 MB". */
+  proposal: { name: string; size: string; url: string } | null;
 }
 
-export { randomCode };
-
-function randomCode(length: number) {
-  // No 0/O/1/I so codes are easy to read out over the phone.
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  return Array.from({ length }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
+/** The client's PDF brief. `url` needs a staff session. */
+export interface IdeaAttachment {
+  id: string;
+  name: string;
+  size: number;
+  type: string;
+  url: string;
 }
 
-export function newProjectCode(existing: string[]) {
-  const yy = String(new Date().getFullYear()).slice(-2);
-  let code = "";
-  do code = `APC-${yy}-${randomCode(5)}`;
-  while (existing.includes(code));
-  return code;
+/**
+ * An idea as the inbox sees it. Fields are nullable while it is still a DRAFT,
+ * because the client fills them in over several visits.
+ */
+export interface Idea {
+  id: number;
+  ref: string;
+  /** Null until it is submitted. */
+  submittedAt: string | null;
+  createdAt: string | null;
+  lastSavedAt: string | null;
+  source: IdeaSource;
+  name: string | null;
+  email: string;
+  phone: string | null;
+  organisation: string | null;
+  /** Display string built from state and country, e.g. "Oyo, Nigeria". */
+  location: string;
+  country: string | null;
+  state: string | null;
+  title: string | null;
+  category: string | null;
+  platforms: string[];
+  problem: string | null;
+  targetUsers: string | null;
+  features: string | null;
+  budget: string | null;
+  timeline: string | null;
+  nda: boolean;
+  status: IdeaStatus;
+  notes: string | null;
+  /** Set once it has been registered as a project. */
+  projectCode: string | null;
+  attachment: IdeaAttachment | null;
+  quote: Quote | null;
+  paymentStatus: FeeState;
+  payment: IdeaPayment;
+  wallet: WalletEntry[];
 }
 
-export function updateIdea(id: string, patch: Partial<Idea>) {
-  ideas.set((all) => all.map((i) => (i.id === id ? { ...i, ...patch } : i)));
+export interface IdeaFilters {
+  status?: IdeaStatus;
+  q?: string;
+  payment?: FeeState;
+  /** Admins only: include applications the client hasn't submitted yet. */
+  includeDrafts?: boolean;
 }
 
-export function resetIdeas() {
-  ideas.reset();
+/* ================= reading ================= */
+
+/** The last list loaded from the server, so non-React code can read it synchronously. */
+let snapshot: Idea[] = [];
+
+/** The idea inbox. Drafts are left out unless an admin asks for them. */
+export function useIdeas(filters: IdeaFilters = {}) {
+  const { status, q, payment, includeDrafts } = filters;
+  const path = KEYS.ideas + query({ status, q, payment, includeDrafts: includeDrafts ? 1 : undefined });
+  const { data, loading, error, refresh } = useApi<Idea[]>(path);
+  const ideas = useMemo(() => {
+    // Only the unfiltered list is worth keeping for sync readers.
+    if (data && path === KEYS.ideas) snapshot = data;
+    return data ?? [];
+  }, [data, path]);
+  return { ideas, loading, error, refresh };
+}
+
+export const readIdeas = () => snapshot;
+
+/** One idea with its quote, brief and wallet. */
+export function useIdea(id: number | null) {
+  return useApi<Idea>(id ? `${KEYS.ideas}/${id}` : null);
+}
+
+/* ================= changing ================= */
+
+/**
+ * Moves an idea along or saves the review notes.
+ * The server refuses QUOTE_SENT until the fee is paid, and DECLINED while a transfer
+ * is waiting to be confirmed. Declining a paid idea queues its refund; reopening it cancels that.
+ */
+export async function updateIdea(id: number, patch: { status?: IdeaStatusChange; notes?: string | null }) {
+  const idea = await api.patch<Idea>(`${KEYS.ideas}/${id}`, patch);
+  await refreshIdeas();
+  return idea;
+}
+
+/** Accept & convert (admin): creates the client, registers the project and emails the Project ID. */
+export async function convertIdea(id: number, input: { leadId: number; targetDate: string; startDate?: string }) {
+  const result = await api.post<{ projectCode: string; idea: Idea }>(`${KEYS.ideas}/${id}/convert`, input);
+  await Promise.all([refreshIdeas(), refreshProjects()]);
+  return result;
 }

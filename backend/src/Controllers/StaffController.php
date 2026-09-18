@@ -49,6 +49,8 @@ final class StaffController
             $data['newIdeas'] = (int) Database::value("SELECT COUNT(*) FROM ideas WHERE status = 'NEW'");
         }
         if ($user['role'] === 'admin') {
+            // Badge for the notification log: messages still waiting to go out or that failed to send.
+            $data['notifications'] = (int) Database::value("SELECT COUNT(*) FROM notifications WHERE status IN ('queued','failed')");
             $data['paymentsToConfirm'] = (int) Database::value("SELECT COUNT(*) FROM idea_payments WHERE status = 'AWAITING_CONFIRMATION'");
             $data['refundsPending'] = (int) Database::value("SELECT COUNT(*) FROM idea_payments WHERE status = 'PAID' AND refund_status IN ('PENDING','PROCESSING')");
         }
@@ -281,11 +283,19 @@ final class StaffController
         $user = Auth::requireStaff(self::TEAM_ROLES);
         [$where, $params] = Projects::visibilityFilter($user);
         $rows = Database::all(
-            "SELECT u.*, p.code AS project_code, p.title AS project_title FROM updates u JOIN projects p ON p.id = u.project_id
+            "SELECT u.*, p.code AS project_code, p.title AS project_title, p.lead_id, l.name AS lead_name
+             FROM updates u JOIN projects p ON p.id = u.project_id LEFT JOIN users l ON l.id = p.lead_id
              WHERE u.status = 'pending' AND {$where} ORDER BY u.created_at",
             $params,
         );
-        Response::json(array_map(static fn ($u) => Presenter::update($u) + ['projectCode' => $u['project_code'], 'projectTitle' => $u['project_title']], $rows));
+        // canApprove mirrors Projects::requireLeadOf, so the panel can disable the button instead of showing a 403.
+        $isAdmin = $user['role'] === 'admin';
+        Response::json(array_map(static fn ($u) => Presenter::update($u) + [
+            'projectCode' => $u['project_code'],
+            'projectTitle' => $u['project_title'],
+            'leadName' => $u['lead_name'],
+            'canApprove' => $isAdmin || ($user['role'] === 'lead' && (int) $u['lead_id'] === (int) $user['id']),
+        ], $rows));
     }
 
     /* ---------------- stage & progress (EN-02) ---------------- */
