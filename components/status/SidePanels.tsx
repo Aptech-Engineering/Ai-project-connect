@@ -2,11 +2,13 @@
 
 import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Check, CheckCircle2, Download, FileImage, FileSignature, FileText, Loader2, Star } from "lucide-react";
+import { Check, CheckCircle2, Download, FileImage, FileSignature, FileText, Loader2, Star, UploadCloud, X } from "lucide-react";
 import { cn, daysFromNow, formatDate } from "@/lib/format";
 import type { Project, SharedFile } from "@/lib/types";
 import type { Notify } from "../PortalApp";
 import { approveMilestoneAsClient, rateProject } from "@/lib/actions";
+import { clientUploadFile } from "@/lib/flows";
+import { formatBytes, saveFile } from "@/lib/files";
 
 const card = "rounded-3xl border border-line bg-white p-5 shadow-sm sm:p-7";
 
@@ -86,14 +88,46 @@ const FILE_ICON: Record<SharedFile["kind"], React.ElementType> = {
   doc: FileText,
 };
 
+const CLIENT_UPLOAD_TYPES = ".pdf,.png,.jpg,.jpeg,.webp,.docx,.xlsx,.pptx,.zip";
+const CLIENT_UPLOAD_MAX = 20 * 1024 * 1024;
+
 export function FilesPanel({ project, notify }: { project: Project; notify: Notify }) {
   const [busy, setBusy] = useState<string | null>(null);
+  const [pending, setPending] = useState<File | null>(null);
+  const [note, setNote] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+  const [error, setError] = useState("");
+
+  const pick = (file?: File) => {
+    setError("");
+    if (!file) return;
+    if (!new RegExp(`(${CLIENT_UPLOAD_TYPES.split(",").map((e) => e.replace(".", "\\.")).join("|")})$`, "i").test(file.name)) return setError("Use PDF, images, Word, Excel, PowerPoint or ZIP files.");
+    if (file.size > CLIENT_UPLOAD_MAX) return setError("Files must be 20 MB or smaller.");
+    setPending(file);
+  };
+
+  const upload = async () => {
+    if (!pending) return;
+    setUploading(true);
+    try {
+      const stored = await saveFile(pending);
+      clientUploadFile(project, { name: pending.name, kind: "doc", size: formatBytes(pending.size), blobId: stored.id, note: note.trim() || undefined });
+      notify(`${pending.name} shared with ${project.lead.name}.`);
+      setPending(null);
+      setNote("");
+    } catch {
+      setError("Upload failed. Please try again.");
+    } finally {
+      setUploading(false);
+    }
+  };
 
   const download = async (file: SharedFile) => {
     setBusy(file.id);
     try {
-      const { downloadMockFile } = await import("@/lib/report");
-      await downloadMockFile(project, file);
+      const { downloadSharedFile } = await import("@/lib/report");
+      await downloadSharedFile(project, file);
       notify(`${file.name} downloaded.`);
     } finally {
       setBusy(null);
@@ -102,8 +136,63 @@ export function FilesPanel({ project, notify }: { project: Project; notify: Noti
 
   return (
     <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4 }} className={card}>
-      <h4 className="font-display text-lg font-bold">Shared files</h4>
-      <p className="mt-1 text-sm text-muted">Proposals, designs and documents from your team.</p>
+      <h4 id="shared-files" className="scroll-mt-24 font-display text-lg font-bold">
+        Shared files
+      </h4>
+      <p className="mt-1 text-sm text-muted">Documents from your team, and anything you send them.</p>
+
+      <div className="mt-4">
+        {pending ? (
+          <div className="space-y-2 rounded-2xl border border-brand/30 bg-brand-soft/30 p-3">
+            <div className="flex items-center gap-3">
+              <FileText className="size-5 shrink-0 text-brand-700" />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-bold">{pending.name}</span>
+                <span className="block text-xs text-muted">{formatBytes(pending.size)}</span>
+              </span>
+              <button onClick={() => setPending(null)} aria-label="Remove file" className="rounded-lg p-1.5 text-muted hover:bg-white hover:text-danger">
+                <X className="size-4" />
+              </button>
+            </div>
+            <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Add a note for your team (optional)" aria-label="Note for your team" className="h-10 w-full rounded-xl border border-line bg-white px-3 text-sm outline-none focus:border-brand" />
+            <button onClick={upload} disabled={uploading} className="flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-navy text-sm font-bold text-white disabled:opacity-60">
+              {uploading ? <Loader2 className="size-4 animate-spin" /> : <UploadCloud className="size-4" />} Send to your team
+            </button>
+          </div>
+        ) : (
+          <label
+            htmlFor="client-upload"
+            onDragOver={(e) => {
+              e.preventDefault();
+              setDragOver(true);
+            }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setDragOver(false);
+              pick(e.dataTransfer.files?.[0]);
+            }}
+            className={cn("flex cursor-pointer items-center gap-3 rounded-2xl border-2 border-dashed px-4 py-3 transition", dragOver ? "border-brand bg-brand-soft/40" : "border-line hover:border-brand/40")}
+          >
+            <UploadCloud className="size-5 shrink-0 text-brand" />
+            <span className="text-sm">
+              <span className="font-bold">Upload content, logos or documents</span>
+              <span className="block text-xs text-muted">PDF, images, Office files or ZIP · max 20 MB</span>
+            </span>
+            <input
+              id="client-upload"
+              type="file"
+              accept={CLIENT_UPLOAD_TYPES}
+              className="sr-only"
+              onChange={(e) => {
+                pick(e.target.files?.[0]);
+                e.target.value = "";
+              }}
+            />
+          </label>
+        )}
+        {error && <p className="mt-2 text-xs font-bold text-danger">{error}</p>}
+      </div>
       {project.files.length === 0 && <p className="mt-4 rounded-2xl border border-dashed border-line p-4 text-sm text-muted">No files shared yet.</p>}
       <ul className="mt-4 space-y-2">
         {project.files.map((f) => {
@@ -122,7 +211,9 @@ export function FilesPanel({ project, notify }: { project: Project; notify: Noti
                   <span className="block truncate text-sm font-bold">{f.name}</span>
                   <span className="block text-xs text-muted">
                     {f.size} · {formatDate(f.date)}
+                    {f.source === "client" && <span className="ml-1.5 rounded-full bg-teal-soft px-1.5 py-0.5 text-[10px] font-bold text-teal-700">You sent this</span>}
                   </span>
+                  {f.note && <span className="mt-0.5 block truncate text-xs italic text-muted">&ldquo;{f.note}&rdquo;</span>}
                 </span>
                 <span className="grid size-9 shrink-0 place-items-center rounded-full bg-navy text-white transition group-hover:bg-brand">
                   {busy === f.id ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}

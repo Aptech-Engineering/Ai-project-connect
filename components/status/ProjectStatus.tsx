@@ -18,11 +18,13 @@ import StageTimeline from "./StageTimeline";
 import UpdatesFeed from "./UpdatesFeed";
 import StackPanel from "./StackPanel";
 import { FilesPanel, MilestonesPanel, RatingPanel } from "./SidePanels";
+import { ChangeRequestsPanel, EmailPreferences, HandoverPanel, WalletPanel } from "./ClientPanels";
 import StageBadge from "./StageBadge";
 import MessageThread from "../MessageThread";
 import { postClientMessage } from "@/lib/actions";
 import { STAGES, clientUpdates } from "@/lib/data";
 import { useProjects } from "@/lib/store";
+import { useSiteContent } from "@/lib/content";
 import { cn, daysFromNow, formatDate, initials, relativeDay } from "@/lib/format";
 import type { Project } from "@/lib/types";
 import type { Notify } from "../PortalApp";
@@ -47,7 +49,8 @@ export default function ProjectStatus({
 }) {
   const [downloading, setDownloading] = useState(false);
   const siblings = useProjects().filter((p) => p.client.name === project.client.name);
-  const stage = STAGES[project.stage];
+  const { portal } = useSiteContent();
+  const stage = { ...STAGES[project.stage], meaning: portal.stageMeanings?.[project.stage] || STAGES[project.stage].meaning };
   const lastUpdate = clientUpdates(project)[0];
 
   const downloadReport = async () => {
@@ -166,8 +169,8 @@ export default function ProjectStatus({
                     </div>
                     <button
                       onClick={() => {
-                        postClientMessage(project, "I'm sending the content you asked for now.");
-                        notify(`Thanks! ${project.lead.name} has been told you're sending the content.`);
+                        document.getElementById("shared-files")?.scrollIntoView({ behavior: "smooth", block: "start" });
+                        window.setTimeout(() => document.getElementById("client-upload")?.click(), 500);
                       }}
                       className="flex shrink-0 items-center justify-center gap-2 rounded-full bg-navy px-4 py-2.5 text-sm font-bold text-white hover:bg-navy-700"
                     >
@@ -234,6 +237,7 @@ export default function ProjectStatus({
             {/* main grid */}
             <div className="mt-5 grid gap-5 lg:grid-cols-[1fr_400px]">
               <div className="flex min-w-0 flex-col gap-5">
+                <HandoverPanel project={project} notify={notify} />
                 <UpdatesFeed project={project} />
                 <MessageThread
                   className="rounded-3xl border border-line bg-white p-5 shadow-sm sm:p-7"
@@ -248,11 +252,14 @@ export default function ProjectStatus({
                   }}
                 />
                 <MilestonesPanel project={project} notify={notify} />
+                <ChangeRequestsPanel project={project} notify={notify} />
               </div>
               <div className="flex min-w-0 flex-col gap-5">
                 <StackPanel project={project} notify={notify} />
                 <FilesPanel project={project} notify={notify} />
+                <WalletPanel project={project} />
                 {project.stage === "DELIVERED" && <RatingPanel project={project} notify={notify} />}
+                <EmailPreferences project={project} notify={notify} />
               </div>
             </div>
           </motion.div>

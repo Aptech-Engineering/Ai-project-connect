@@ -28,9 +28,14 @@ import {
   X,
 } from "lucide-react";
 import StageBadge from "../status/StageBadge";
-import { LEADS, STAFF, STAGES, STAGE_MIN_PROGRESS, TECHNOLOGIES, isClientVisible, timelineStep } from "@/lib/data";
+import { STAGES, STAGE_MIN_PROGRESS, isClientVisible, timelineStep } from "@/lib/data";
+import { activeLeads, activeTeamMembers, canLeadProject, personOf, useStaff, useStaffUsers } from "@/lib/staff";
+import { useCatalog } from "@/lib/catalog";
+import { useSiteContent } from "@/lib/content";
 import { announceStage, announceUpdate, assignMember, changeLead, postTeamReply, regenerateProjectCode, removeFile, removeMember, shareFile } from "@/lib/actions";
 import MessageThread from "../MessageThread";
+import { ChangeRequestsEditor, DigestPreviewButton, HandoverEditor } from "./ProjectExtras";
+import { MAX_PDF_BYTES, formatBytes, saveFile } from "@/lib/files";
 import { updateProject, uid, withActivity } from "@/lib/store";
 import { cn, daysFromNow, formatDate, initials, relativeDay, shortDate } from "@/lib/format";
 import type { Project, SharedFile, StageKey, Update } from "@/lib/types";
@@ -54,6 +59,7 @@ export default function ProjectWorkspace({
   onCodeChange: (code: string) => void;
   notify: Notify;
 }) {
+  const me = useStaff();
   const stale = isStale(project);
   const days = daysSinceClientUpdate(project);
 
@@ -88,6 +94,7 @@ export default function ProjectWorkspace({
               <a href="/" target="_blank" className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-bold text-teal-700 hover:bg-teal-soft">
                 <Eye className="size-3.5" /> Preview client portal
               </a>
+              <DigestPreviewButton project={project} />
             </div>
           </div>
           <div className="w-full lg:w-64">
@@ -127,14 +134,16 @@ export default function ProjectWorkspace({
             subtitle={`Conversation with ${project.client.name}. Replies are emailed to the client.`}
             placeholder="Reply in plain language…"
             onSend={(text) => {
-              postTeamReply(project, actingAs(role), text);
+              postTeamReply(project, actingAs(me), text);
               notify(`Reply sent to ${project.client.name}.`);
             }}
           />
           <FilesEditor project={project} role={role} notify={notify} />
+          <ChangeRequestsEditor project={project} notify={notify} />
         </div>
         <div className="flex min-w-0 flex-col gap-5">
           <StageControl project={project} role={role} notify={notify} />
+          <HandoverEditor project={project} notify={notify} />
           <StackEditor project={project} role={role} notify={notify} />
           <MilestoneEditor project={project} role={role} notify={notify} />
           <ProjectIdCard project={project} role={role} notify={notify} onCodeChange={onCodeChange} />
@@ -157,6 +166,7 @@ const TEMPLATES = [
 const SCREENSHOTS: NonNullable<Update["screenshot"]>[] = ["design", "onboarding", "payment", "dashboard"];
 
 function Composer({ project, role, notify }: { project: Project; role: StaffRole; notify: Notify }) {
+  const me = useStaff();
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [visibility, setVisibility] = useState<"client" | "internal">("client");
@@ -170,7 +180,7 @@ function Composer({ project, role, notify }: { project: Project; role: StaffRole
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!valid) return;
-    const author = actingAs(role);
+    const author = actingAs(me);
     const update: Update = {
       id: uid(),
       date: new Date().toISOString(),
@@ -327,6 +337,7 @@ function Composer({ project, role, notify }: { project: Project; role: StaffRole
 type Filter = "all" | "client" | "internal" | "pending";
 
 function UpdatesList({ project, role, notify }: { project: Project; role: StaffRole; notify: Notify }) {
+  const me = useStaff();
   const [filter, setFilter] = useState<Filter>("all");
   const counts: Record<Filter, number> = {
     all: project.updates.length,
@@ -340,14 +351,14 @@ function UpdatesList({ project, role, notify }: { project: Project; role: StaffR
 
   const approve = (u: Update) => {
     updateProject(project.code, (p) =>
-      withActivity({ ...p, updates: p.updates.map((x) => (x.id === u.id ? { ...x, pending: false, date: new Date().toISOString() } : x)) }, actingAs(role), `Approved and published "${u.title}"`),
+      withActivity({ ...p, updates: p.updates.map((x) => (x.id === u.id ? { ...x, pending: false, date: new Date().toISOString() } : x)) }, actingAs(me), `Approved and published "${u.title}"`),
     );
     announceUpdate(project, u);
     notify(`Published to ${project.client.name}'s portal.`);
   };
 
   const remove = (u: Update) => {
-    updateProject(project.code, (p) => withActivity({ ...p, updates: p.updates.filter((x) => x.id !== u.id) }, actingAs(role), `${u.pending ? "Rejected" : "Deleted"} "${u.title}"`));
+    updateProject(project.code, (p) => withActivity({ ...p, updates: p.updates.filter((x) => x.id !== u.id) }, actingAs(me), `${u.pending ? "Rejected" : "Deleted"} "${u.title}"`));
     notify(u.pending ? "Update sent back to the engineer." : "Update deleted.", "info");
   };
 
@@ -423,7 +434,7 @@ function UpdatesList({ project, role, notify }: { project: Project; role: StaffR
                   {u.author.name} · {u.author.role}
                 </span>
                 <div className="flex gap-2">
-                  {u.pending && role === "lead" && (
+                  {u.pending && canLeadProject(me, project) && (
                     <>
                       <button onClick={() => remove(u)} className="rounded-full border border-line bg-white px-3 py-1.5 text-xs font-bold text-muted hover:text-danger">
                         Reject
@@ -433,7 +444,7 @@ function UpdatesList({ project, role, notify }: { project: Project; role: StaffR
                       </button>
                     </>
                   )}
-                  {!u.pending && role === "lead" && u.kind !== "stage" && (
+                  {!u.pending && canLeadProject(me, project) && u.kind !== "stage" && (
                     <button onClick={() => remove(u)} aria-label="Delete update" className="rounded-full p-1.5 text-muted transition hover:bg-danger-soft hover:text-danger">
                       <Trash2 className="size-4" />
                     </button>
@@ -456,16 +467,18 @@ function Tag({ className, children }: { className: string; children: React.React
 const STAGE_ORDER: StageKey[] = ["SUBMITTED", "UNDER_REVIEW", "APPROVED", "DESIGN", "DEVELOPMENT", "TESTING", "DEPLOYMENT", "DELIVERED", "ON_HOLD"];
 
 function StageControl({ project, role, notify }: { project: Project; role: StaffRole; notify: Notify }) {
+  const me = useStaff();
   const [stage, setStage] = useState<StageKey>(project.stage);
   const [progress, setProgress] = useState(project.progress);
   const [reason, setReason] = useState(project.holdReason ?? "");
-  const locked = role !== "lead";
+  const locked = !canLeadProject(me, project);
+  const meanings = useSiteContent().portal.stageMeanings;
   const dirty = stage !== project.stage || progress !== project.progress || (stage === "ON_HOLD" && reason !== (project.holdReason ?? ""));
   const valid = stage !== "ON_HOLD" || reason.trim().length > 8;
 
   const save = () => {
     if (!dirty || !valid) return;
-    const author = actingAs(role);
+    const author = actingAs(me);
     const stageChanged = stage !== project.stage;
     const finalProgress = stage === "DELIVERED" ? 100 : progress;
     updateProject(project.code, (p) => {
@@ -578,7 +591,7 @@ function StageControl({ project, role, notify }: { project: Project; role: Staff
 
         {stage !== project.stage && (
           <p className="mt-3 rounded-lg bg-blue-soft px-3 py-2 text-xs text-navy">
-            Saving will post a client-visible update: <b>&ldquo;{STAGES[stage].meaning}&rdquo;</b>
+            Saving will post a client-visible update: <b>&ldquo;{meanings?.[stage] || STAGES[stage].meaning}&rdquo;</b>
           </p>
         )}
 
@@ -596,15 +609,18 @@ function StageControl({ project, role, notify }: { project: Project; role: Staff
 }
 
 function StackEditor({ project, role, notify }: { project: Project; role: StaffRole; notify: Notify }) {
-  const available = Object.values(TECHNOLOGIES).filter((t) => !project.stack.some((s) => s.techId === t.id));
+  const me = useStaff();
+  const { technologies, technologyList } = useCatalog();
+  const available = technologyList.filter((t) => !project.stack.some((s) => s.techId === t.id));
   const [techId, setTechId] = useState("");
   const [usage, setUsage] = useState("");
-  const author = actingAs(role);
+  const author = actingAs(me);
 
   const add = (e: React.FormEvent) => {
     e.preventDefault();
     if (!techId || !usage.trim()) return;
-    const tech = TECHNOLOGIES[techId];
+    const tech = technologies[techId];
+    if (!tech) return;
     updateProject(project.code, (p) => withActivity({ ...p, stack: [...p.stack, { techId, usage: usage.trim() }] }, author, `Tagged ${tech.name} (${usage.trim()})`));
     notify(`${tech.name} added. Clients will see it with a "Learn this" course link.`);
     setTechId("");
@@ -618,7 +634,8 @@ function StackEditor({ project, role, notify }: { project: Project; role: StaffR
       <ul className="mt-4 space-y-2">
         <AnimatePresence initial={false}>
           {project.stack.map((s) => {
-            const t = TECHNOLOGIES[s.techId];
+            const t = technologies[s.techId];
+            if (!t) return null;
             return (
               <motion.li key={s.techId} layout initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, x: 30 }} className="flex items-center gap-3 rounded-xl bg-mist p-2.5">
                 <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-navy font-display text-[11px] font-bold" style={{ color: t.color }}>
@@ -670,12 +687,13 @@ function StackEditor({ project, role, notify }: { project: Project; role: StaffR
 }
 
 function MilestoneEditor({ project, role, notify }: { project: Project; role: StaffRole; notify: Notify }) {
+  const me = useStaff();
   const [adding, setAdding] = useState(false);
   const [title, setTitle] = useState("");
   const [due, setDue] = useState("");
   const [needsApproval, setNeedsApproval] = useState(false);
-  const lead = role === "lead";
-  const author = actingAs(role);
+  const lead = canLeadProject(me, project);
+  const author = actingAs(me);
   const done = project.milestones.filter((m) => m.completedAt).length;
 
   const toggle = (id: string) => {
@@ -779,10 +797,13 @@ function MilestoneEditor({ project, role, notify }: { project: Project; role: St
 }
 
 function Team({ project, role, notify }: { project: Project; role: StaffRole; notify: Notify }) {
-  const lead = role === "lead";
+  const me = useStaff();
+  const lead = canLeadProject(me, project);
   const [pick, setPick] = useState("");
-  const available = STAFF.filter((m) => !project.team.some((t) => t.name === m.name));
-  const actor = actingAs(role);
+  const staffUsers = useStaffUsers();
+  const available = activeTeamMembers(staffUsers).filter((u) => !project.team.some((t) => t.name === u.name));
+  const leadChoices = activeLeads(staffUsers);
+  const actor = actingAs(me);
 
   return (
     <div className={card}>
@@ -823,16 +844,16 @@ function Team({ project, role, notify }: { project: Project; role: StaffRole; no
           <div className="flex gap-2">
             <select value={pick} onChange={(e) => setPick(e.target.value)} aria-label="Assign a team member" className={cn(input, "h-10")}>
               <option value="">Assign engineer…</option>
-              {available.map((m) => (
-                <option key={m.name} value={m.name}>
-                  {m.name} ({m.role})
+              {available.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.name} ({personOf(u).role})
                 </option>
               ))}
             </select>
             <button
               disabled={!pick}
               onClick={() => {
-                const person = STAFF.find((m) => m.name === pick)!;
+                const person = personOf(available.find((u) => u.id === pick)!);
                 assignMember(project, person, actor);
                 setPick("");
                 notify(`${person.name} assigned and notified by email.`);
@@ -848,14 +869,15 @@ function Team({ project, role, notify }: { project: Project; role: StaffRole; no
             <select
               value={project.lead.name}
               onChange={(e) => {
-                const next = LEADS.find((l) => l.name === e.target.value)!;
+                const next = personOf(leadChoices.find((u) => u.name === e.target.value)!);
                 changeLead(project, next, actor);
                 notify(`${next.name} is now the project lead.`);
               }}
               className="h-8 flex-1 rounded-lg border border-line bg-white px-2 text-xs font-bold text-navy outline-none focus:border-brand"
             >
-              {LEADS.map((l) => (
-                <option key={l.name}>{l.name}</option>
+              {!leadChoices.some((u) => u.name === project.lead.name) && <option>{project.lead.name}</option>}
+              {leadChoices.map((u) => (
+                <option key={u.id}>{u.name}</option>
               ))}
             </select>
           </label>
@@ -866,6 +888,7 @@ function Team({ project, role, notify }: { project: Project; role: StaffRole; no
 }
 
 function ProjectIdCard({ project, role, notify, onCodeChange }: { project: Project; role: StaffRole; notify: Notify; onCodeChange: (code: string) => void }) {
+  const me = useStaff();
   const [confirming, setConfirming] = useState(false);
   return (
     <div className={card}>
@@ -875,7 +898,7 @@ function ProjectIdCard({ project, role, notify, onCodeChange }: { project: Proje
       <p className="mt-3 rounded-xl bg-mist px-3 py-2.5 text-center font-mono text-lg font-bold tracking-wider">{project.code}</p>
       {project.revokedCodes?.length ? <p className="mt-2 text-xs text-muted">Revoked: {project.revokedCodes.join(", ")}</p> : null}
       <p className="mt-2 text-xs text-muted">Clients sign in with this ID plus a one-time code. Regenerate it if it was shared or exposed.</p>
-      {role === "lead" &&
+      {canLeadProject(me, project) &&
         (confirming ? (
           <div className="mt-3 rounded-xl border border-danger/20 bg-danger-soft p-3">
             <p className="text-xs text-danger">The old ID stops working immediately and the client is sent the new one by email and SMS.</p>
@@ -885,7 +908,7 @@ function ProjectIdCard({ project, role, notify, onCodeChange }: { project: Proje
               </button>
               <button
                 onClick={() => {
-                  const code = regenerateProjectCode(project, actingAs(role));
+                  const code = regenerateProjectCode(project, actingAs(me));
                   setConfirming(false);
                   onCodeChange(code);
                   notify(`New Project ID ${code} issued. ${project.code} is revoked.`);
@@ -909,16 +932,20 @@ function ProjectIdCard({ project, role, notify, onCodeChange }: { project: Proje
 }
 
 function FilesEditor({ project, role, notify }: { project: Project; role: StaffRole; notify: Notify }) {
+  const me = useStaff();
   const [kind, setKind] = useState<SharedFile["kind"]>("doc");
-  const actor = actingAs(role);
+  const actor = actingAs(me);
 
-  const onFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const onFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
     e.target.value = "";
     if (!f) return;
-    const size = f.size > 1_000_000 ? `${(f.size / 1_000_000).toFixed(1)} MB` : `${Math.max(1, Math.round(f.size / 1000))} KB`;
-    // Mock upload: the file's name and size are shared; the portal serves a generated sample PDF.
-    shareFile(project, { name: f.name.replace(/\.[^.]+$/, "") + ".pdf", kind, size }, actor);
+    if (f.size > MAX_PDF_BYTES) {
+      notify("Files must be 10 MB or smaller.", "info");
+      return;
+    }
+    const stored = await saveFile(f);
+    shareFile(project, { name: f.name, kind, size: formatBytes(f.size), blobId: stored.id }, actor);
     notify(`${f.name} shared with ${project.client.name}.`);
   };
 
@@ -951,19 +978,21 @@ function FilesEditor({ project, role, notify }: { project: Project; role: StaffR
                 <span className="block text-xs text-muted">
                   {f.size} · {formatDate(f.date)}
                   {f.uploadedBy ? ` · ${f.uploadedBy}` : ""}
+                  {f.source === "client" && <span className="ml-1.5 rounded-full bg-teal-soft px-1.5 py-0.5 text-[10px] font-bold text-teal-700">From client</span>}
+                  {f.note && <span className="block truncate italic">&ldquo;{f.note}&rdquo;</span>}
                 </span>
               </span>
               <button
                 onClick={async () => {
-                  const { downloadMockFile } = await import("@/lib/report");
-                  await downloadMockFile(project, f);
+                  const { downloadSharedFile } = await import("@/lib/report");
+                  await downloadSharedFile(project, f);
                 }}
                 aria-label={`Download ${f.name}`}
                 className="rounded-lg p-1.5 text-muted hover:bg-white hover:text-navy"
               >
                 <Download className="size-4" />
               </button>
-              {role === "lead" && (
+              {canLeadProject(me, project) && (
                 <button
                   onClick={() => {
                     removeFile(project, f.id, actor);

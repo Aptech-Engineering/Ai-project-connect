@@ -3,18 +3,20 @@
 import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { BellRing, CheckCheck, GraduationCap, Mail, MessageCircle, MessageSquareText, Smartphone } from "lucide-react";
-import { COURSES, TECHNOLOGIES } from "@/lib/data";
+import { useCatalog } from "@/lib/catalog";
 import { postTeamReply } from "@/lib/actions";
 import { updateLead, useLeads, useOutbox, useProjects } from "@/lib/store";
 import { cn, relativeDay } from "@/lib/format";
 import type { LeadStatus, Notice } from "@/lib/types";
 import type { Notify } from "../PortalApp";
 import { actingAs, type StaffRole } from "./helpers";
+import { canViewProject, useStaff } from "@/lib/staff";
 
 /* ---------- Client messages ---------- */
 
 export function MessagesInbox({ role, notify, onOpen }: { role: StaffRole; notify: Notify; onOpen: (code: string) => void }) {
-  const projects = useProjects();
+  const me = useStaff();
+  const projects = useProjects().filter((p) => canViewProject(me, p));
   const threads = projects
     .filter((p) => (p.messages ?? []).length > 0)
     .map((p) => {
@@ -55,6 +57,7 @@ function QuickReply({
   notify: Notify;
   onOpen: (code: string) => void;
 }) {
+  const me = useStaff();
   const [text, setText] = useState("");
   return (
     <div className={cn("rounded-2xl border bg-white p-5 shadow-sm", needsReply ? "border-brand/40" : "border-line")}>
@@ -82,7 +85,7 @@ function QuickReply({
           onSubmit={(e) => {
             e.preventDefault();
             if (!text.trim()) return;
-            postTeamReply(project, actingAs(role), text.trim());
+            postTeamReply(project, actingAs(me), text.trim());
             setText("");
             notify(`Reply sent to ${project.client.name}.`);
           }}
@@ -114,6 +117,7 @@ const LEAD_STATUSES: Record<LeadStatus, { label: string; className: string }> = 
 
 export function LeadsQueue({ notify }: { notify: Notify }) {
   const leads = useLeads();
+  const { courses, technologies } = useCatalog();
   const [filter, setFilter] = useState<LeadStatus | "ALL">("ALL");
   const list = leads.filter((l) => filter === "ALL" || l.status === filter);
   const enrolled = leads.filter((l) => l.status === "ENROLLED").length;
@@ -144,13 +148,13 @@ export function LeadsQueue({ notify }: { notify: Notify }) {
       <ul className="mt-4 space-y-3">
         <AnimatePresence initial={false}>
           {list.map((l) => {
-            const tech = TECHNOLOGIES[l.techId];
-            const course = COURSES[l.courseId];
+            const tech = technologies[l.techId];
+            const course = courses[l.courseId];
             return (
               <motion.li key={l.id} layout initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="rounded-2xl border border-line bg-white p-5 shadow-sm">
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
-                  <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-navy font-display text-xs font-bold" style={{ color: tech?.color }}>
-                    {tech?.mark}
+                  <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-navy font-display text-xs font-bold" style={{ color: tech?.color ?? "#F26B22" }}>
+                    {tech?.mark ?? <GraduationCap className="size-5" />}
                   </span>
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
@@ -158,12 +162,20 @@ export function LeadsQueue({ notify }: { notify: Notify }) {
                       <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-bold uppercase", l.type === "enrol" ? "bg-teal-soft text-teal-700" : "bg-mist text-muted")}>
                         {l.type === "enrol" ? "Wants to enrol" : "Requested info"}
                       </span>
+                      {l.source === "invite" && <span className="rounded-full bg-brand-soft px-2 py-0.5 text-[10px] font-bold uppercase text-brand-700">Invited by {l.invitedBy}</span>}
                     </div>
                     <p className="mt-0.5 flex items-center gap-1.5 text-sm">
-                      <GraduationCap className="size-4 text-brand" /> {course?.title}
+                      <GraduationCap className="size-4 text-brand" /> {course?.title ?? "Course removed"}
                     </p>
                     <p className="mt-1 text-xs text-muted">
-                      From {l.projectTitle} (<span className="font-mono">{l.projectCode}</span>) via {tech?.name} · {relativeDay(l.at)}
+                      {l.projectCode ? (
+                        <>
+                          From {l.projectTitle} (<span className="font-mono">{l.projectCode}</span>) via {tech?.name ?? "stack panel"}
+                        </>
+                      ) : (
+                        <>From the website courses section{l.contact ? ` · ${l.contact}` : ""}</>
+                      )}{" "}
+                      · {relativeDay(l.at)}
                     </p>
                     <input
                       defaultValue={l.notes}

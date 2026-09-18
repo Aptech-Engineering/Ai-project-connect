@@ -9,41 +9,76 @@ import {
   CheckCircle2,
   Copy,
   Lightbulb,
+  Download,
+  Eye,
+  FileText,
   Mail,
+  Paperclip,
   MapPin,
   Phone,
   Rocket,
   Search,
+  Lock,
   ShieldCheck,
   Wallet,
 } from "lucide-react";
 import { IDEA_STATUSES, updateIdea, useIdeas, type Idea, type IdeaStatus } from "@/lib/ideas";
 import { convertIdeaToProject } from "@/lib/actions";
-import { LEADS } from "@/lib/data";
+import { activeLeads, personOf, useStaff, useStaffUsers } from "@/lib/staff";
 import { cn, formatDate, initials, relativeDay } from "@/lib/format";
+import { formatBytes, openStoredFile } from "@/lib/files";
 import type { Notify } from "../PortalApp";
 import { actingAs, type StaffRole } from "./helpers";
+import QuotePanel from "./QuotePanel";
+import PaymentPanel from "./PaymentPanel";
+import { formatPrice } from "@/lib/catalog";
+import { FEE_STATES, REFUND_STATES, declineIdea, feeState, paidPayment, paymentBlocker } from "@/lib/wallet";
 
 
 type Filter = IdeaStatus | "ALL";
 
-export default function IdeasInbox({ role, notify, onOpenProject }: { role: StaffRole; notify: Notify; onOpenProject: (code: string) => void }) {
+export default function IdeasInbox({
+  role,
+  notify,
+  onOpenProject,
+  initialFilter,
+  initialSelectedId,
+}: {
+  role: StaffRole;
+  notify: Notify;
+  onOpenProject: (code: string) => void;
+  initialFilter?: Filter;
+  initialSelectedId?: string;
+}) {
+  const me = useStaff();
   const ideas = useIdeas();
-  const [filter, setFilter] = useState<Filter>("ALL");
+  const focused = initialSelectedId ? ideas.find((i) => i.id === initialSelectedId) : undefined;
+  const [filter, setFilter] = useState<Filter>(initialFilter ?? (focused?.status === "DRAFT" ? "DRAFT" : "ALL"));
   const [query, setQuery] = useState("");
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(initialSelectedId ?? null);
   const selected = ideas.find((i) => i.id === selectedId);
 
   const counts = ideas.reduce<Record<string, number>>((acc, i) => ({ ...acc, [i.status]: (acc[i.status] ?? 0) + 1 }), {});
+  const submitted = ideas.filter((i) => i.status !== "DRAFT");
+  const toConfirm = submitted.filter((i) => feeState(i) === "AWAITING_CONFIRMATION").length;
+  const filters = (["ALL", ...Object.keys(IDEA_STATUSES).filter((k) => k !== "DRAFT"), ...(me.role === "admin" ? ["DRAFT"] : [])] as Filter[]);
   const q = query.trim().toLowerCase();
   const list = ideas.filter(
-    (i) => (filter === "ALL" || i.status === filter) && (!q || [i.title, i.name, i.ref, i.category, i.location].some((s) => s.toLowerCase().includes(q))),
+    (i) =>
+      (filter === "ALL" ? i.status !== "DRAFT" : i.status === filter) &&
+      (me.role === "admin" || i.status !== "DRAFT") &&
+      (!q || [i.title, i.name, i.ref, i.category, i.location, i.email].some((s) => s.toLowerCase().includes(q))),
   );
 
   return (
     <div>
       <h1 className="font-display text-3xl font-bold">Submitted ideas</h1>
-      <p className="mt-1 text-muted">Ideas sent through the &ldquo;Submit your idea&rdquo; form on the client portal.</p>
+      <p className="mt-1 text-muted">Ideas sent through the &ldquo;Submit your idea&rdquo; form. An idea can only be approved once its commitment fee is paid.</p>
+      {toConfirm > 0 && (
+        <p className="mt-3 flex items-center gap-2 rounded-xl bg-brand-soft px-4 py-2.5 text-sm text-brand-700">
+          <Wallet className="size-4" /> {toConfirm} bank transfer{toConfirm === 1 ? "" : "s"} waiting for confirmation.
+        </p>
+      )}
 
       <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center">
         <div className="flex h-11 flex-1 items-center gap-2 rounded-xl border border-line bg-white px-3 focus-within:border-brand focus-within:ring-4 focus-within:ring-brand/15">
@@ -52,13 +87,13 @@ export default function IdeasInbox({ role, notify, onOpenProject }: { role: Staf
         </div>
       </div>
       <div className="no-scrollbar mt-3 flex gap-1.5 overflow-x-auto">
-        {(["ALL", ...Object.keys(IDEA_STATUSES)] as Filter[]).map((f) => (
+        {filters.map((f) => (
           <button
             key={f}
             onClick={() => setFilter(f)}
             className={cn("shrink-0 rounded-full px-3.5 py-1.5 text-xs font-bold transition", filter === f ? "bg-navy text-white" : "bg-white text-muted hover:text-navy")}
           >
-            {f === "ALL" ? "All" : IDEA_STATUSES[f].label} <span className="opacity-60">{f === "ALL" ? ideas.length : (counts[f] ?? 0)}</span>
+            {f === "ALL" ? "All" : f === "DRAFT" ? "Unfinished drafts" : IDEA_STATUSES[f].label} <span className="opacity-60">{f === "ALL" ? submitted.length : (counts[f] ?? 0)}</span>
           </button>
         ))}
       </div>
@@ -91,12 +126,18 @@ export default function IdeasInbox({ role, notify, onOpenProject }: { role: Staf
                     </div>
                     <StatusPill status={idea.status} />
                   </div>
-                  <p className="mt-2 line-clamp-2 text-sm text-navy/75">{idea.problem}</p>
+                  <p className="mt-2 line-clamp-2 text-sm text-navy/75">{idea.problem || "Not filled in yet."}</p>
                   <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted">
                     <span className="font-mono">{idea.ref}</span>
+                    <FeeBadge idea={idea} />
                     <span>{idea.category}</span>
                     <span>{idea.budget}</span>
-                    <span className="ml-auto">{relativeDay(idea.submittedAt)}</span>
+                    {idea.attachment && (
+                      <span className="flex items-center gap-1 font-bold text-navy">
+                        <Paperclip className="size-3" /> PDF
+                      </span>
+                    )}
+                    <span className="ml-auto">{idea.status === "DRAFT" ? `saved ${relativeDay(idea.lastSavedAt ?? idea.submittedAt).toLowerCase()}` : relativeDay(idea.submittedAt)}</span>
                   </div>
                 </button>
               </motion.li>
@@ -131,23 +172,36 @@ export default function IdeasInbox({ role, notify, onOpenProject }: { role: Staf
   );
 }
 
+function FeeBadge({ idea }: { idea: Idea }) {
+  const refund = paidPayment(idea)?.refund;
+  const meta = refund && refund.status !== "REFUNDED" ? REFUND_STATES[refund.status] : FEE_STATES[feeState(idea)];
+  return <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-bold uppercase", meta.className)}>{meta.label}</span>;
+}
+
 function StatusPill({ status }: { status: IdeaStatus }) {
   return <span className={cn("shrink-0 rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide", IDEA_STATUSES[status].className)}>{IDEA_STATUSES[status].label}</span>;
 }
 
 function IdeaDetail({ idea, role, notify, onBack, onOpenProject }: { idea: Idea; role: StaffRole; notify: Notify; onBack: () => void; onOpenProject: (code: string) => void }) {
+  const me = useStaff();
   const [notes, setNotes] = useState(idea.notes ?? "");
   const [converting, setConverting] = useState(false);
-  const [leadName, setLeadName] = useState(LEADS[0].name);
+  const leadChoices = activeLeads(useStaffUsers());
+  const [leadName, setLeadName] = useState(leadChoices.find((u) => u.role === "lead")?.name ?? leadChoices[0]?.name ?? "");
   const [targetDate, setTargetDate] = useState(() => {
     const d = new Date();
     d.setDate(d.getDate() + 90);
     return d.toISOString().slice(0, 10);
   });
 
+  const blocker = paymentBlocker(idea);
+
   const convert = () => {
-    const lead = LEADS.find((l) => l.name === leadName)!;
-    const code = convertIdeaToProject(idea, lead, targetDate, actingAs(role), notes || idea.notes);
+    if (blocker) return notify(blocker, "info");
+    const leadUser = leadChoices.find((u) => u.name === leadName);
+    if (!leadUser) return;
+    const lead = personOf(leadUser);
+    const code = convertIdeaToProject(idea, lead, targetDate, actingAs(me), notes || idea.notes);
     setConverting(false);
     notify(`Project ${code} created. Welcome email & SMS with the Project ID sent to ${idea.name}.`);
   };
@@ -162,7 +216,7 @@ function IdeaDetail({ idea, role, notify, onBack, onOpenProject }: { idea: Idea;
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <p className="font-mono text-xs text-muted">
-              {idea.ref} · submitted {formatDate(idea.submittedAt)}
+              {idea.ref} · {idea.status === "DRAFT" ? `draft saved ${formatDate(idea.lastSavedAt ?? idea.submittedAt)}${idea.startedBy ? ` · started by ${idea.startedBy}` : ""}` : `submitted ${formatDate(idea.submittedAt)}`}
             </p>
             <h2 className="mt-1 font-display text-2xl font-bold">{idea.title}</h2>
             <p className="text-sm text-muted">
@@ -194,6 +248,32 @@ function IdeaDetail({ idea, role, notify, onBack, onOpenProject }: { idea: Idea;
           </div>
         </div>
 
+        {idea.attachment && (
+          <div className="mt-5 flex items-center gap-3 rounded-2xl border border-line p-3">
+            <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-danger-soft text-danger">
+              <FileText className="size-5" />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-sm font-bold">{idea.attachment.name}</span>
+              <span className="block text-xs text-muted">PDF brief from {idea.name.split(" ")[0]} · {formatBytes(idea.attachment.size)}</span>
+            </span>
+            {(["view", "download"] as const).map((mode) => (
+              <button
+                key={mode}
+                onClick={async () => {
+                  const ok = await openStoredFile(idea.attachment!.id, idea.attachment!.name, mode);
+                  if (!ok) notify("This file is no longer available in this browser.", "info");
+                }}
+                aria-label={mode === "view" ? "View PDF" : "Download PDF"}
+                className="flex items-center gap-1.5 rounded-full border border-line px-3 py-2 text-xs font-bold transition hover:border-navy"
+              >
+                {mode === "view" ? <Eye className="size-3.5" /> : <Download className="size-3.5" />}
+                <span className="hidden sm:inline">{mode === "view" ? "View" : "Download"}</span>
+              </button>
+            ))}
+          </div>
+        )}
+
         <dl className="mt-5 space-y-4 text-sm">
           <Section label="Problem">{idea.problem}</Section>
           <Section label="Target users">{idea.targetUsers}</Section>
@@ -220,8 +300,16 @@ function IdeaDetail({ idea, role, notify, onBack, onOpenProject }: { idea: Idea;
           className="mt-1.5 w-full resize-none rounded-xl border border-line px-3.5 py-2.5 text-sm outline-none focus:border-brand focus:ring-4 focus:ring-brand/15"
         />
 
+        <PaymentPanel idea={idea} notify={notify} />
+
+        {idea.status !== "DRAFT" && <QuotePanel idea={idea} notify={notify} />}
+
         {/* actions */}
-        {idea.projectCode ? (
+        {idea.status === "DRAFT" ? (
+          <p className="mt-5 rounded-xl bg-mist px-4 py-3 text-sm text-muted">
+            This application isn&apos;t submitted yet. It appears in the inbox once the client finishes it and pays the commitment fee.
+          </p>
+        ) : idea.projectCode ? (
           <div className="mt-5 flex flex-col gap-3 rounded-2xl bg-teal-soft p-4 sm:flex-row sm:items-center">
             <CheckCircle2 className="size-7 shrink-0 text-teal" />
             <p className="flex-1 text-sm">
@@ -251,6 +339,16 @@ function IdeaDetail({ idea, role, notify, onBack, onOpenProject }: { idea: Idea;
                 <button
                   key={s}
                   onClick={() => {
+                    if (s === idea.status) return;
+                    if (s === "QUOTE_SENT" && blocker) return notify(blocker, "info");
+                    if (s === "DECLINED") {
+                      const paid = paidPayment(idea);
+                      if (!window.confirm(`Decline ${idea.title}?${paid && !paid.refund ? ` The ${formatPrice(paid.amount, paid.currency)} commitment fee will be queued for a full refund.` : ""}`)) return;
+                      if (notes !== (idea.notes ?? "")) updateIdea(idea.id, { notes });
+                      const result = declineIdea(idea.id, actingAs(me));
+                      if (!result.ok) return notify(result.error, "info");
+                      return notify(result.refundQueued ? `Idea declined. Refund queued for ${idea.name}.` : "Idea declined.", "info");
+                    }
                     updateIdea(idea.id, { status: s, notes });
                     notify(s === "QUOTE_SENT" ? `Marked as quote sent to ${idea.name}.` : `Status changed to ${IDEA_STATUSES[s].label}.`, "info");
                   }}
@@ -274,8 +372,8 @@ function IdeaDetail({ idea, role, notify, onBack, onOpenProject }: { idea: Idea;
                       <label className="text-xs font-bold">
                         Project lead
                         <select value={leadName} onChange={(e) => setLeadName(e.target.value)} className="mt-1 h-10 w-full rounded-xl border border-line bg-white px-3 text-sm font-normal outline-none focus:border-brand">
-                          {LEADS.map((l) => (
-                            <option key={l.name}>{l.name}</option>
+                          {leadChoices.map((u) => (
+                            <option key={u.id}>{u.name}</option>
                           ))}
                         </select>
                       </label>
@@ -295,17 +393,24 @@ function IdeaDetail({ idea, role, notify, onBack, onOpenProject }: { idea: Idea;
                   </div>
                 </motion.div>
               ) : (
+                me.role !== "admin" ? (
+                  <p key="btn" className="mt-5 rounded-xl bg-mist px-4 py-3 text-sm text-muted">
+                    Only an admin can register this idea as a project. Mark it as <b>Quote sent</b> and let an admin know.
+                  </p>
+                ) : (
                 <motion.button
                   key="btn"
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
                   onClick={() => setConverting(true)}
-                  disabled={idea.status === "DECLINED"}
+                  disabled={idea.status === "DECLINED" || Boolean(blocker)}
+                  title={blocker ?? undefined}
                   className="mt-5 flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-brand font-bold text-white shadow-lg shadow-brand/20 transition hover:bg-brand-600 disabled:opacity-40 disabled:shadow-none"
                 >
-                  <Rocket className="size-4" /> Accept & convert to project
+                  {blocker ? <Lock className="size-4" /> : <Rocket className="size-4" />} Accept & convert to project
                 </motion.button>
+                )
               )}
             </AnimatePresence>
           </>

@@ -2,7 +2,7 @@
 
 import { PROJECTS } from "./data";
 import { createCollection } from "./collection";
-import type { CourseLead, Notice, Person, Project } from "./types";
+import type { ActivityEntry, CourseEvent, CourseLead, Notice, Person, Project } from "./types";
 
 function ago(days: number) {
   const d = new Date();
@@ -18,6 +18,20 @@ const SEED_LEADS: CourseLead[] = [
 const projects = createCollection<Project>("apc-demo-projects-v1", PROJECTS);
 const leads = createCollection<CourseLead>("apc-demo-leads-v1", SEED_LEADS);
 const outbox = createCollection<Notice>("apc-demo-outbox-v1", []);
+
+function seedEvents(): CourseEvent[] {
+  const out: CourseEvent[] = [];
+  const counts: Record<string, [number, number]> = { react: [42, 12], flutter: [30, 9], node: [18, 5], figma: [25, 7] };
+  let n = 0;
+  for (const [courseId, [views, clicks]] of Object.entries(counts)) {
+    for (let i = 0; i < views; i++) out.push({ id: `ev${n++}`, at: ago((i * 7) % 40), event: "view", courseId });
+    for (let i = 0; i < clicks; i++) out.push({ id: `ev${n++}`, at: ago((i * 5) % 40), event: "click", courseId, techId: courseId });
+  }
+  return out;
+}
+
+const courseEvents = createCollection<CourseEvent>("apc-demo-course-events-v1", seedEvents());
+const activityLog = createCollection<ActivityEntry>("apc-demo-activity-v1", []);
 
 export function uid() {
   return Math.random().toString(36).slice(2, 10);
@@ -49,7 +63,26 @@ export function addProject(project: Project) {
 
 export function withActivity(p: Project, actor: Person | string, action: string): Project {
   const who = typeof actor === "string" ? actor : `${actor.name} (${actor.role})`;
+  logActivity(who, action, p.code);
   return { ...p, activity: [{ id: uid(), at: new Date().toISOString(), actor: who, action }, ...(p.activity ?? [])] };
+}
+
+/* ---------- admin-wide activity log ---------- */
+
+export const useActivityLog = () => activityLog.useItems();
+
+export function logActivity(actor: Person | string, action: string, projectCode?: string) {
+  const who = typeof actor === "string" ? actor : `${actor.name} (${actor.role})`;
+  const actorType: ActivityEntry["actorType"] = who.includes("(Client)") ? "client" : who === "System" ? "system" : "staff";
+  activityLog.set((all) => [{ id: uid(), at: new Date().toISOString(), actorType, actor: who, action, projectCode }, ...all].slice(0, 2000));
+}
+
+/* ---------- course funnel events (LS-05) ---------- */
+
+export const useCourseEvents = () => courseEvents.useItems();
+
+export function recordCourseEvent(event: CourseEvent["event"], courseId: string, techId?: string, projectCode?: string) {
+  courseEvents.set((all) => [...all, { id: uid(), at: new Date().toISOString(), event, courseId, techId, projectCode }].slice(-5000));
 }
 
 /* ---------- course leads ---------- */
@@ -84,4 +117,6 @@ export function resetStore() {
   projects.reset();
   leads.reset();
   outbox.reset();
+  courseEvents.reset();
+  activityLog.reset();
 }

@@ -5,39 +5,12 @@ import { motion } from "framer-motion";
 import { ArrowRight, ArrowUp, Mail, MapPin, Phone, ShieldCheck, Sparkles } from "lucide-react";
 import Logo from "./Logo";
 import type { Notify } from "./PortalApp";
-
-const COLUMNS = [
-  {
-    title: "Product",
-    links: [
-      { label: "Track a project", href: "#track" },
-      { label: "Submit an idea", href: "#contact" },
-      { label: "How it works", href: "#track" },
-      { label: "Support plans", href: "#contact" },
-    ],
-  },
-  {
-    title: "Learn the stack",
-    links: [
-      { label: "React & Next.js", href: "#learn" },
-      { label: "Node.js back-end", href: "#learn" },
-      { label: "Flutter mobile apps", href: "#learn" },
-      { label: "All Aptech courses", href: "#learn" },
-    ],
-  },
-  {
-    title: "Company",
-    links: [
-      { label: "About Aptech", href: "#contact" },
-      { label: "Our centres", href: "#contact" },
-      { label: "Privacy & NDAs", href: "#contact" },
-      { label: "Terms", href: "#contact" },
-    ],
-  },
-];
+import { useSiteContent } from "@/lib/content";
+import { SiteLink } from "./HomeSections";
 
 export default function Footer({ notify, onSubmitIdea }: { notify: Notify; onSubmitIdea: (email?: string) => void }) {
   const [email, setEmail] = useState("");
+  const { footer } = useSiteContent();
 
   return (
     <footer id="contact" className="relative isolate overflow-hidden bg-navy text-white">
@@ -69,14 +42,13 @@ export default function Footer({ notify, onSubmitIdea }: { notify: Notify; onSub
           <div className="relative flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
             <div className="max-w-xl">
               <p className="flex items-center gap-2 text-sm font-bold uppercase tracking-[0.14em] text-white/85">
-                <Sparkles className="size-4" /> Got an idea?
+                <Sparkles className="size-4" /> {footer.ctaEyebrow}
               </p>
               <h2 className="mt-2 font-display text-3xl font-bold leading-tight sm:text-4xl">
-                You bring the idea. <br className="hidden sm:block" />
-                We&apos;ll build it with you.
+                {footer.ctaTitle}
               </h2>
               <p className="mt-3 text-white/85">
-                No technical skills needed. Tell us the problem, your users and your budget, and our engineers will send a proposal.
+                {footer.ctaText}
               </p>
             </div>
             <form
@@ -100,7 +72,7 @@ export default function Footer({ notify, onSubmitIdea }: { notify: Notify; onSub
                 className="h-12 flex-1 rounded-xl bg-white px-4 text-navy outline-none placeholder:text-muted focus:ring-4 focus:ring-navy/20"
               />
               <button className="group flex h-12 items-center justify-center gap-2 rounded-xl bg-navy px-5 font-bold text-white transition hover:bg-navy-950">
-                Get started <ArrowRight className="size-4 transition group-hover:translate-x-1" />
+                {footer.ctaButton} <ArrowRight className="size-4 transition group-hover:translate-x-1" />
               </button>
             </form>
           </div>
@@ -112,41 +84,32 @@ export default function Footer({ notify, onSubmitIdea }: { notify: Notify; onSub
         <div>
           <Logo />
           <p className="mt-4 max-w-sm leading-relaxed text-white/60">
-            We build your idea. You watch it grow. Then you learn the stack behind it. An Aptech initiative.
+            {footer.about}
           </p>
           <ul className="mt-6 space-y-3 text-sm text-white/70">
             <li className="flex items-center gap-3">
-              <Mail className="size-4 text-brand" /> hello@aiprojectconnect.com
+              <Mail className="size-4 text-brand" /> <a href={`mailto:${footer.email}`} className="hover:text-white">{footer.email}</a>
             </li>
             <li className="flex items-center gap-3">
-              <Phone className="size-4 text-brand" /> +234 700 APTECH (278324)
+              <Phone className="size-4 text-brand" /> {footer.phone}
             </li>
             <li className="flex items-center gap-3">
-              <MapPin className="size-4 text-brand" /> Visit any Aptech centre to submit an idea in person
+              <MapPin className="size-4 text-brand" /> {footer.address}
             </li>
           </ul>
         </div>
 
         <div className="grid grid-cols-2 gap-8 sm:grid-cols-3">
-          {COLUMNS.map((col) => (
+          {footer.columns.map((col) => (
             <div key={col.title}>
               <p className="font-display text-sm font-semibold">{col.title}</p>
               <ul className="mt-4 space-y-3">
                 {col.links.map((l) => (
-                  <li key={l.label}>
-                    <a
-                      href={l.href}
-                      onClick={(e) => {
-                        if (l.label === "Submit an idea") {
-                          e.preventDefault();
-                          onSubmitIdea();
-                        }
-                      }}
-                      className="group inline-flex items-center gap-1 text-sm text-white/60 transition hover:text-white"
-                    >
+                  <li key={l.label + l.href}>
+                    <SiteLink href={l.href} onSubmitIdea={() => onSubmitIdea()} className="group inline-flex items-center gap-1 text-sm text-white/60 transition hover:text-white">
                       <span className="h-px w-0 bg-brand transition-all group-hover:w-3" />
                       {l.label}
-                    </a>
+                    </SiteLink>
                   </li>
                 ))}
               </ul>
@@ -158,15 +121,15 @@ export default function Footer({ notify, onSubmitIdea }: { notify: Notify; onSub
       {/* giant wordmark */}
       <div aria-hidden className="container-page select-none overflow-hidden">
         <p className="bg-gradient-to-b from-white/[0.09] to-transparent bg-clip-text text-center font-display text-[15vw] font-extrabold leading-[0.8] tracking-tighter text-transparent lg:text-[10.5rem]">
-          Project Connect
+          {footer.wordmark}
         </p>
       </div>
 
       <div className="border-t border-white/10">
         <div className="container-page flex flex-col items-center justify-between gap-3 py-6 text-xs text-white/50 sm:flex-row">
-          <p>© {new Date().getFullYear()} AI Project Connect by Aptech. All rights reserved.</p>
+          <p>© {new Date().getFullYear()} {footer.copyright}</p>
           <p className="flex items-center gap-1.5">
-            <ShieldCheck className="size-3.5 text-teal" /> Your ideas are confidential. Access always needs a one-time code.
+            <ShieldCheck className="size-3.5 text-teal" /> {footer.securityNote}
           </p>
           <div className="flex items-center gap-2">
           <a href="/engineering" className="rounded-full border border-white/10 px-3 py-1.5 transition hover:border-brand hover:text-white">

@@ -1,4 +1,4 @@
-import type { Course, Person, Project, StageInfo, StageKey, Technology, Update } from "./types";
+import type { Person, Project, StageInfo, StageKey, Update } from "./types";
 
 /** Mock dates are relative to today so the demo always feels live. */
 function day(offset: number): string {
@@ -9,10 +9,6 @@ function day(offset: number): string {
 }
 
 export const DEMO_OTP = "246810";
-
-/** Mock staff credentials for the Engineering Panel demo. Real auth must happen on the server. */
-export const STAFF_LOGIN = "aptechdevteam.com";
-export const STAFF_PASSWORD = "Aptechdev123";
 
 export const STALE_DAYS = 5;
 
@@ -32,32 +28,6 @@ export const STAGES: Record<StageKey, StageInfo> = {
 
 /** Lowest typical progress for each stage (PRD section 08). */
 export const STAGE_MIN_PROGRESS: Partial<Record<StageKey, number>> = { APPROVED: 5, DESIGN: 10, DEVELOPMENT: 25, TESTING: 75, DEPLOYMENT: 90, DELIVERED: 100 };
-
-export const COURSES: Record<string, Course> = {
-  react: { id: "react", title: "Front-End Web Development with React", duration: "12 weeks", format: "Hybrid · Weekends", nextStart: day(21), fee: "₦185,000" },
-  next: { id: "next", title: "Full-Stack Apps with Next.js", duration: "10 weeks", format: "Online · Live classes", nextStart: day(28), fee: "₦210,000" },
-  node: { id: "node", title: "Back-End APIs with Node.js & Express", duration: "10 weeks", format: "In-centre · Weekdays", nextStart: day(14), fee: "₦175,000" },
-  nest: { id: "nest", title: "Scalable APIs with NestJS", duration: "8 weeks", format: "Online · Evenings", nextStart: day(35), fee: "₦195,000" },
-  postgres: { id: "postgres", title: "Databases & SQL with PostgreSQL", duration: "6 weeks", format: "Hybrid · Evenings", nextStart: day(10), fee: "₦120,000" },
-  flutter: { id: "flutter", title: "Mobile App Development with Flutter", duration: "14 weeks", format: "In-centre · Weekends", nextStart: day(24), fee: "₦220,000" },
-  rn: { id: "rn", title: "Cross-Platform Apps with React Native", duration: "12 weeks", format: "Online · Live classes", nextStart: day(31), fee: "₦205,000" },
-  figma: { id: "figma", title: "UI/UX Design with Figma", duration: "8 weeks", format: "Hybrid · Weekends", nextStart: day(7), fee: "₦140,000" },
-  cloud: { id: "cloud", title: "Cloud Deployment & DevOps Essentials", duration: "8 weeks", format: "Online · Evenings", nextStart: day(42), fee: "₦190,000" },
-  firebase: { id: "firebase", title: "Serverless Apps with Firebase", duration: "6 weeks", format: "Online · Self-paced + mentor", nextStart: day(12), fee: "₦110,000" },
-};
-
-export const TECHNOLOGIES: Record<string, Technology> = {
-  react: { id: "react", name: "React", category: "Front-end", mark: "Re", color: "#61DAFB", courseId: "react", plain: "Builds the screens your customers see and click on in their web browser." },
-  next: { id: "next", name: "Next.js", category: "Front-end", mark: "N", color: "#FFFFFF", courseId: "next", plain: "Makes your website fast and easy for Google to find." },
-  node: { id: "node", name: "Node.js", category: "Back-end", mark: "Nd", color: "#8CC84B", courseId: "node", plain: "The engine behind the scenes that handles logins, orders and payments." },
-  nest: { id: "nest", name: "NestJS", category: "Back-end", mark: "Ns", color: "#E0234E", courseId: "nest", plain: "Keeps the behind-the-scenes code organised as your app grows." },
-  postgres: { id: "postgres", name: "PostgreSQL", category: "Database", mark: "Pg", color: "#6FA8DC", courseId: "postgres", plain: "Where your app safely stores its data — users, products and orders." },
-  flutter: { id: "flutter", name: "Flutter", category: "Mobile", mark: "Fl", color: "#54C5F8", courseId: "flutter", plain: "Builds your Android (and later iPhone) app from one set of code." },
-  rn: { id: "rn", name: "React Native", category: "Mobile", mark: "RN", color: "#61DAFB", courseId: "rn", plain: "Lets one team build your app for both Android and iPhone." },
-  figma: { id: "figma", name: "Figma", category: "Design", mark: "Fg", color: "#F24E1E", courseId: "figma", plain: "Where your screens are drawn and approved before any code is written." },
-  aws: { id: "aws", name: "AWS Cloud", category: "Hosting", mark: "Aw", color: "#FF9900", courseId: "cloud", plain: "The rented computers that keep your app online day and night." },
-  firebase: { id: "firebase", name: "Firebase", category: "Back-end", mark: "Fb", color: "#FFCA28", courseId: "firebase", plain: "Sends instant notifications and keeps data in sync across phones." },
-};
 
 const tunde: Person = { name: "Tunde Bakare", role: "Project lead" };
 const chioma: Person = { name: "Chioma Eze", role: "Front-end engineer" };
@@ -104,6 +74,21 @@ export const PROJECTS: Project[] = [
       { techId: "node", usage: "API server" },
       { techId: "postgres", usage: "Database" },
       { techId: "flutter", usage: "Android app" },
+    ],
+    changeRequests: [
+      {
+        id: "cr1",
+        title: "Add pay-on-delivery for buyers",
+        description: "Buyers should be able to pay cash when their order arrives.",
+        requestedBy: "client",
+        requesterName: "Ada Okafor",
+        status: "QUOTED",
+        impactCost: 350000,
+        impactDays: 10,
+        currency: "NGN",
+        responseNote: "Needs a rider cash-collection flow and a daily reconciliation report.",
+        createdAt: day(-1),
+      },
     ],
     messages: [
       { id: "q1", at: day(-9), from: "client", author: "Ada Okafor", text: "Will farmers without smartphones be able to use it?" },
@@ -186,6 +171,19 @@ export const PROJECTS: Project[] = [
       { id: "f1", name: "ShopBeta-Handover-Guide.pdf", kind: "doc", size: "2.1 MB", date: day(-12) },
       { id: "f2", name: "ShopBeta-Support-Plan.pdf", kind: "proposal", size: "310 KB", date: day(-12) },
     ],
+    handover: {
+      requestedAt: day(-13),
+      signedAt: day(-12),
+      signedName: "Segun Afolabi",
+      supportPlan: "basic",
+      items: [
+        "Source code and repository access handed over",
+        "Admin logins and passwords shared securely",
+        "Hosting, domain and app store accounts transferred",
+        "User guide and documentation delivered",
+        "Training session with your team completed",
+      ].map((title, i) => ({ id: `h${i + 1}`, title, doneAt: day(-13), doneBy: "Tunde Bakare" })),
+    },
   },
   {
     code: "APC-26-H2NP6",
@@ -249,9 +247,6 @@ export const PROJECTS: Project[] = [
     files: [{ id: "f1", name: "KoboSave-Proposal.pdf", kind: "proposal", size: "1.0 MB", date: day(-15) }],
   },
 ];
-
-export const STAFF: Person[] = [tunde, grace, chioma, ibrahim, zainab, femi, david];
-export const LEADS = STAFF.filter((p) => p.role === "Project lead");
 
 export const DEMO_IDS =PROJECTS.slice(0, 4).map((p) => ({ code: p.code, title: p.title, stage: p.stage }));
 

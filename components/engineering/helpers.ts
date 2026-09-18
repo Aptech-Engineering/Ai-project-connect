@@ -1,11 +1,16 @@
 import { STALE_DAYS, isClientVisible } from "@/lib/data";
 import { daysFromNow } from "@/lib/format";
+import { personOf, type StaffRole, type StaffUser } from "@/lib/staff";
 import type { Person, Project } from "@/lib/types";
 
-export type StaffRole = "lead" | "engineer";
+export type { StaffRole };
 
-export function actingAs(role: StaffRole): Person {
-  return { name: "Aptech Dev Team", role: role === "lead" ? "Project lead" : "Engineer" };
+/** Admins and project leads can approve, change stages and manage teams. */
+export const canLead = (role: StaffRole) => role === "admin" || role === "lead";
+
+/** The signed-in staff member as they appear on updates, replies and the activity log. */
+export function actingAs(user: StaffUser): Person {
+  return personOf(user);
 }
 
 export function daysSinceClientUpdate(p: Project) {

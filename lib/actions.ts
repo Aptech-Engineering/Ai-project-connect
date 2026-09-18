@@ -5,10 +5,13 @@
  * Each one updates shared data, logs activity and queues the email/SMS the
  * PRD says should go out (NT-01 to NT-03), so both sides always agree.
  */
-import { COURSES, STAGES, TECHNOLOGIES } from "./data";
-import { findIdea, newProjectCode, readIdeas, submitIdea, updateIdea, type Idea, type IdeaInput } from "./ideas";
-import { addLead, addProject, findProject, notifyClient, notifyStaff, readProjects, sendNotice, uid, updateProject, withActivity } from "./store";
+import { STAGES } from "./data";
+import { findCourse, findTechnology } from "./catalog";
+import { stageMeaning } from "./content";
+import { findIdea, newProjectCode, readIdeas, updateIdea, type Idea } from "./ideas";
+import { addLead, addProject, findProject, notifyClient, notifyStaff, readProjects, recordCourseEvent, sendNotice, uid, updateProject, withActivity } from "./store";
 import type { Person, Project, SharedFile, StageKey, Update } from "./types";
+import { formatBytes } from "./files";
 
 const staffEmail = (p: Person) => `${p.name} · ${p.name.split(" ")[0].toLowerCase()}@aptech.dev`;
 
@@ -40,9 +43,11 @@ export function approveMilestoneAsClient(p: Project, milestoneId: string) {
 }
 
 export function requestCourse(p: Project, techId: string, type: "info" | "enrol") {
-  const tech = TECHNOLOGIES[techId];
-  const course = COURSES[tech.courseId];
-  addLead({ projectCode: p.code, projectTitle: p.title, clientName: p.client.name, techId, courseId: course.id, type });
+  const tech = findTechnology(techId);
+  const course = tech ? findCourse(tech.courseId) : undefined;
+  if (!tech || !course) return;
+  addLead({ projectCode: p.code, projectTitle: p.title, clientName: p.client.name, techId, courseId: course.id, type, source: "portal" });
+  recordCourseEvent(type === "enrol" ? "enrol" : "request", course.id, techId, p.code);
   sendNotice({
     audience: "counsellor",
     channel: "email",
@@ -50,6 +55,21 @@ export function requestCourse(p: Project, techId: string, type: "info" | "enrol"
     subject: `New ${type === "enrol" ? "enrolment" : "info request"}: ${course.title}`,
     body: `${p.client.name} (${p.title}) clicked "${type === "enrol" ? "Enrol" : "Request info"}" on ${tech.name}.`,
     projectCode: p.code,
+  });
+}
+
+/** Enquiry from the public courses section (no project yet). */
+export function requestCourseEnquiry(courseId: string, type: "info" | "enrol", name: string, contact: string) {
+  const course = findCourse(courseId);
+  if (!course) return;
+  addLead({ projectCode: "", projectTitle: "Website visitor", clientName: name, contact, techId: "", courseId, type, source: "website" });
+  recordCourseEvent(type === "enrol" ? "enrol" : "request", courseId);
+  sendNotice({
+    audience: "counsellor",
+    channel: "email",
+    to: "Admissions team · admissions@aptech.dev",
+    subject: `New ${type === "enrol" ? "enrolment" : "info request"} from the website: ${course.title}`,
+    body: `${name} (${contact}) asked about ${course.title}.`,
   });
 }
 
@@ -76,7 +96,7 @@ export function announceUpdate(p: Project, u: Pick<Update, "title" | "body">) {
 }
 
 export function announceStage(p: Project, stage: StageKey, reason?: string) {
-  notifyClient(p, `${p.title} is now: ${STAGES[stage].label}`, reason ?? STAGES[stage].meaning);
+  notifyClient(p, `${p.title} is now: ${STAGES[stage].label}`, reason ?? stageMeaning(stage));
 }
 
 export function regenerateProjectCode(p: Project, actor: Person): string {
@@ -121,13 +141,6 @@ export function removeFile(p: Project, fileId: string, actor: Person) {
 
 /* ---------- ideas → projects ---------- */
 
-export function submitIdeaForm(input: IdeaInput): Idea {
-  const idea = submitIdea(input);
-  sendNotice({ audience: "client", channel: "email", to: `${idea.name} · ${idea.email}`, subject: `We received your idea (${idea.ref})`, body: `Thanks for sharing ${idea.title}. We'll send a proposal within 2 working days. Check progress anytime with reference ${idea.ref}.` });
-  notifyStaff("Admin team · admin@aptech.dev", `New idea submitted: ${idea.title}`, `${idea.name} (${idea.location}) · ${idea.category} · ${idea.budget}`);
-  return idea;
-}
-
 export function convertIdeaToProject(idea: Idea, lead: Person, targetDate: string, actor: Person, notes?: string): string {
   const code = newProjectCode(readProjects().map((p) => p.code));
   const now = new Date().toISOString();
@@ -145,6 +158,9 @@ export function convertIdeaToProject(idea: Idea, lead: Person, targetDate: strin
         short: second ? `${first} ${second[0]}.` : first,
         emailMasked: `${idea.email[0]}•••@${idea.email.split("@")[1]}`,
         phoneMasked: `+${digits.slice(0, 3)} ••• ••• ${digits.slice(-4)}`,
+        email: idea.email,
+        phone: idea.phone,
+        organisation: idea.organisation,
       },
       lead,
       team: [lead],
@@ -152,10 +168,12 @@ export function convertIdeaToProject(idea: Idea, lead: Person, targetDate: strin
       progress: 5,
       startDate: now,
       targetDate: new Date(`${targetDate}T09:30:00`).toISOString(),
-      updates: [{ id: uid(), date: now, kind: "stage", author: lead, title: "Welcome! Your project is registered", body: STAGES.APPROVED.meaning }],
+      updates: [{ id: uid(), date: now, kind: "stage", author: lead, title: "Welcome! Your project is registered", body: stageMeaning("APPROVED") }],
       milestones: [{ id: uid(), title: "Proposal & quote accepted", due: now, completedAt: now }],
       stack: [],
-      files: [],
+      files: idea.attachment
+        ? [{ id: uid(), name: idea.attachment.name, kind: "doc", size: formatBytes(idea.attachment.size), date: idea.submittedAt, uploadedBy: idea.name, blobId: idea.attachment.id, source: "client" }]
+        : [],
       messages: [],
     },
     actor,
@@ -164,7 +182,7 @@ export function convertIdeaToProject(idea: Idea, lead: Person, targetDate: strin
   addProject(project);
   updateIdea(idea.id, { status: "ACCEPTED", projectCode: code, notes: notes ?? idea.notes });
   notifyClient(project, "Welcome to AI Project Connect! Your Project ID", `Your project ${idea.title} is registered. Your Project ID is ${code}. Sign in at the portal with this ID and the one-time code we send you.`);
-  notifyStaff(staffEmail(lead), `You're leading a new project: ${idea.title}`, `${actor.name} registered ${idea.title} (${code}) for ${idea.name}.`, code);
+  notifyStaff(staffEmail(lead), `You're leading a new project: ${idea.title}`, `${actor.name === "System" ? "The client accepted the quote online, registering" : `${actor.name} registered`} ${idea.title} (${code}) for ${idea.name}.`, code);
   return code;
 }
 

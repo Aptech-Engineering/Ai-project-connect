@@ -2,18 +2,23 @@
 
 import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { BadgePercent, CalendarDays, CheckCircle2, ChevronDown, Clock, GraduationCap, MonitorSmartphone, Wallet } from "lucide-react";
-import { COURSES, TECHNOLOGIES } from "@/lib/data";
+import { BadgePercent, CalendarDays, CheckCircle2, ChevronDown, Clock, ExternalLink, GraduationCap, MonitorSmartphone, UserPlus, Wallet } from "lucide-react";
+import StoredImage from "../StoredImage";
+import { discountedPrice, formatPrice, useCatalog } from "@/lib/catalog";
+import { useSiteContent } from "@/lib/content";
 import { cn, formatDate } from "@/lib/format";
 import type { Project } from "@/lib/types";
 import type { Notify } from "../PortalApp";
 import { requestCourse, setPromosOptOut } from "@/lib/actions";
+import { inviteToCourse, trackCourseClick } from "@/lib/flows";
 import { useLeads } from "@/lib/store";
 
 type LeadState = "info" | "enrol";
 
 export default function StackPanel({ project, notify }: { project: Project; notify: Notify }) {
   const [open, setOpen] = useState<string | null>(null);
+  const { courses, technologies } = useCatalog();
+  const { portal } = useSiteContent();
   const promos = !project.promosOptOut;
   const leads = Object.fromEntries(
     useLeads()
@@ -23,14 +28,14 @@ export default function StackPanel({ project, notify }: { project: Project; noti
   ) as Record<string, LeadState>;
 
   const createLead = (techId: string, type: LeadState) => {
-    const tech = TECHNOLOGIES[techId];
+    const tech = technologies[techId];
+    const course = tech ? courses[tech.courseId] : undefined;
+    if (!tech || !course) return;
     requestCourse(project, techId, type);
-    notify(
-      type === "enrol"
-        ? `Enrolment started for ${COURSES[tech.courseId].title}. A course counsellor will call you within 24 hours.`
-        : `Request sent! A counsellor will share details about the ${tech.name} course.`,
-    );
+    notify(type === "enrol" ? `Enrolment started for ${course.title}. ${portal.counsellorPromise}` : `Request sent! A counsellor will share details about the ${tech.name} course.`);
   };
+
+  const stack = project.stack.filter((s) => technologies[s.techId]);
 
   return (
     <motion.div
@@ -46,19 +51,20 @@ export default function StackPanel({ project, notify }: { project: Project; noti
       </svg>
 
       <div className="relative">
-        <h4 className="font-display text-lg font-bold">What your app is built with</h4>
-        <p className="mt-1 text-sm text-white/60">The tools our engineers are using, explained simply.</p>
+        <h4 className="font-display text-lg font-bold">{portal.stackTitle}</h4>
+        <p className="mt-1 text-sm text-white/60">{portal.stackSubtitle}</p>
 
-        {project.stack.length === 0 && (
+        {stack.length === 0 && (
           <p className="mt-5 rounded-2xl border border-dashed border-white/15 p-4 text-sm text-white/60">
             Your team is choosing the right tools. They&apos;ll appear here with simple explanations.
           </p>
         )}
         <ul className="mt-5 space-y-2.5">
-          {project.stack.map(({ techId, usage }, i) => {
-            const t = TECHNOLOGIES[techId];
-            const course = COURSES[t.courseId];
-            const isOpen = open === techId && promos;
+          {stack.map(({ techId, usage }, i) => {
+            const t = technologies[techId]!;
+            const course = courses[t.courseId];
+            const hasCourse = Boolean(course?.published);
+            const isOpen = open === techId && promos && hasCourse;
             const lead = leads[techId];
             return (
               <motion.li
@@ -85,9 +91,12 @@ export default function StackPanel({ project, notify }: { project: Project; noti
                     </div>
                     <p className="mt-0.5 text-[13px] leading-snug text-white/70">{t.plain}</p>
                   </div>
-                  {promos && (
+                  {promos && hasCourse && (
                     <button
-                      onClick={() => setOpen(isOpen ? null : techId)}
+                      onClick={() => {
+                        if (!isOpen && course) trackCourseClick(course.id, techId, project.code);
+                        setOpen(isOpen ? null : techId);
+                      }}
                       aria-expanded={isOpen}
                       className={cn(
                         "flex shrink-0 items-center gap-1 rounded-full px-3 py-1.5 text-xs font-bold transition",
@@ -103,7 +112,7 @@ export default function StackPanel({ project, notify }: { project: Project; noti
 
                 {/* Course card: expands inline, never blocks status info (LS-06) */}
                 <AnimatePresence initial={false}>
-                  {isOpen && (
+                  {isOpen && course && (
                     <motion.div
                       initial={{ height: 0, opacity: 0 }}
                       animate={{ height: "auto", opacity: 1 }}
@@ -111,48 +120,72 @@ export default function StackPanel({ project, notify }: { project: Project; noti
                       transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
                       className="overflow-hidden"
                     >
-                      <div className="mx-3.5 mb-3.5 rounded-xl bg-white p-4 text-navy">
-                        <p className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-brand-700">
-                          <GraduationCap className="size-3.5" /> Aptech course
-                        </p>
-                        <p className="mt-1 font-display font-bold leading-snug">{course.title}</p>
-                        <dl className="mt-3 grid grid-cols-2 gap-2 text-xs">
-                          <Fact icon={<Clock className="size-3.5" />} label="Duration" value={course.duration} />
-                          <Fact icon={<MonitorSmartphone className="size-3.5" />} label="Format" value={course.format} />
-                          <Fact icon={<CalendarDays className="size-3.5" />} label="Next start" value={formatDate(course.nextStart)} />
-                          <Fact icon={<Wallet className="size-3.5" />} label="Fee" value={course.fee} />
-                        </dl>
-                        <p className="mt-3 flex items-center gap-2 rounded-lg bg-teal-soft px-3 py-2 text-xs text-teal-700">
-                          <BadgePercent className="size-4 shrink-0" />
-                          <span>
-                            Client discount: <b>10% off</b> with code <b className="font-mono">APC10</b>
-                          </span>
-                        </p>
-                        {lead ? (
-                          <motion.p
-                            initial={{ opacity: 0, scale: 0.95 }}
-                            animate={{ opacity: 1, scale: 1 }}
-                            className="mt-3 flex items-center gap-2 rounded-lg bg-mist px-3 py-2.5 text-sm font-bold"
-                          >
-                            <CheckCircle2 className="size-4 text-teal" />
-                            {lead === "enrol" ? "Enrolment started. We'll call you soon." : "Info requested. We'll be in touch."}
-                          </motion.p>
-                        ) : (
-                          <div className="mt-3 grid grid-cols-2 gap-2">
-                            <button
-                              onClick={() => createLead(techId, "info")}
-                              className="rounded-xl border border-line py-2.5 text-sm font-bold transition hover:border-navy"
+                      <div className="mx-3.5 mb-3.5 overflow-hidden rounded-xl bg-white text-navy">
+                        <StoredImage id={course.flierId} alt={`${course.title} flier`} className="max-h-56 w-full object-cover" />
+                        <div className="p-4">
+                          <p className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-brand-700">
+                            <GraduationCap className="size-3.5" /> Aptech course
+                          </p>
+                          <p className="mt-1 font-display font-bold leading-snug">{course.title}</p>
+                          {course.description && <p className="mt-1 text-xs leading-relaxed text-muted">{course.description}</p>}
+                          <dl className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                            <Fact icon={<Clock className="size-3.5" />} label="Duration" value={course.duration} />
+                            <Fact icon={<MonitorSmartphone className="size-3.5" />} label="Format" value={course.format} />
+                            <Fact icon={<CalendarDays className="size-3.5" />} label="Next start" value={formatDate(course.nextStart)} />
+                            <Fact icon={<Wallet className="size-3.5" />} label="Fee" value={formatPrice(course.price, course.currency)} />
+                          </dl>
+                          {course.discountPercent ? (
+                            <p className="mt-3 flex items-center gap-2 rounded-lg bg-teal-soft px-3 py-2 text-xs text-teal-700">
+                              <BadgePercent className="size-4 shrink-0" />
+                              <span>
+                                {portal.discountLabel}: <b>{course.discountPercent}% off</b>
+                                {course.discountCode && (
+                                  <>
+                                    {" "}
+                                    with code <b className="font-mono">{course.discountCode}</b>
+                                  </>
+                                )}{" "}
+                                · you pay <b>{formatPrice(discountedPrice(course), course.currency)}</b>
+                              </span>
+                            </p>
+                          ) : null}
+                          {lead ? (
+                            <motion.p
+                              initial={{ opacity: 0, scale: 0.95 }}
+                              animate={{ opacity: 1, scale: 1 }}
+                              className="mt-3 flex items-center gap-2 rounded-lg bg-mist px-3 py-2.5 text-sm font-bold"
                             >
-                              Request info
-                            </button>
-                            <button
-                              onClick={() => createLead(techId, "enrol")}
-                              className="rounded-xl bg-brand py-2.5 text-sm font-bold text-white transition hover:bg-brand-600"
+                              <CheckCircle2 className="size-4 text-teal" />
+                              {lead === "enrol" ? "Enrolment started. We'll call you soon." : "Info requested. We'll be in touch."}
+                            </motion.p>
+                          ) : (
+                            <div className="mt-3 grid grid-cols-2 gap-2">
+                              <button
+                                onClick={() => createLead(techId, "info")}
+                                className="rounded-xl border border-line py-2.5 text-sm font-bold transition hover:border-navy"
+                              >
+                                Request info
+                              </button>
+                              <button
+                                onClick={() => createLead(techId, "enrol")}
+                                className="rounded-xl bg-brand py-2.5 text-sm font-bold text-white transition hover:bg-brand-600"
+                              >
+                                Enrol
+                              </button>
+                            </div>
+                          )}
+                          <InviteTeamMember project={project} techId={techId} courseTitle={course.title} notify={notify} />
+                          {course.enrolUrl && (
+                            <a
+                              href={course.enrolUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="mt-2 flex items-center justify-center gap-1 text-xs font-bold text-brand-700 hover:underline"
                             >
-                              Enrol
-                            </button>
-                          </div>
-                        )}
+                              Pay and enrol online <ExternalLink className="size-3" />
+                            </a>
+                          )}
+                        </div>
                       </div>
                     </motion.div>
                   )}
@@ -164,7 +197,9 @@ export default function StackPanel({ project, notify }: { project: Project; noti
 
         {/* Marketing consent: opt out without losing status access */}
         <div className="mt-5 flex items-center justify-between gap-3 border-t border-white/10 pt-4 text-sm">
-          <span id="promo-label" className="text-white/70">Show course suggestions</span>
+          <span id="promo-label" className="text-white/70">
+            Show course suggestions
+          </span>
           <button
             role="switch"
             aria-checked={promos}
@@ -195,5 +230,52 @@ function Fact({ icon, label, value }: { icon: React.ReactNode; label: string; va
       </dt>
       <dd className="mt-0.5 font-bold">{value}</dd>
     </div>
+  );
+}
+
+function InviteTeamMember({ project, techId, courseTitle, notify }: { project: Project; techId: string; courseTitle: string; notify: Notify }) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const valid = name.trim().length > 1 && /^\S+@\S+\.\S+$/.test(email.trim());
+
+  if (!open) {
+    return (
+      <button onClick={() => setOpen(true)} className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-xl py-2 text-xs font-bold text-muted transition hover:bg-mist hover:text-navy">
+        <UserPlus className="size-3.5" /> Invite a team member to this course
+      </button>
+    );
+  }
+  return (
+    <form
+      className="mt-3 space-y-2 rounded-xl bg-mist p-3"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (!valid) return;
+        const problem = inviteToCourse(project, techId, name.trim(), email.trim(), message.trim() || undefined);
+        if (problem) return setError(problem);
+        notify(`Invitation sent to ${name.trim()} for ${courseTitle}.`);
+        setOpen(false);
+        setName("");
+        setEmail("");
+        setMessage("");
+      }}
+    >
+      <p className="text-xs font-bold">Invite someone from your team</p>
+      <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Their name" aria-label="Their name" className="h-9 w-full rounded-lg border border-line bg-white px-3 text-sm outline-none focus:border-brand" />
+      <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Their email" aria-label="Their email" className="h-9 w-full rounded-lg border border-line bg-white px-3 text-sm outline-none focus:border-brand" />
+      <input value={message} onChange={(e) => setMessage(e.target.value)} placeholder="Short message (optional)" aria-label="Message" className="h-9 w-full rounded-lg border border-line bg-white px-3 text-sm outline-none focus:border-brand" />
+      {error && <p className="text-xs font-bold text-danger">{error}</p>}
+      <div className="grid grid-cols-2 gap-2">
+        <button type="button" onClick={() => setOpen(false)} className="h-9 rounded-lg border border-line bg-white text-xs font-bold text-muted">
+          Cancel
+        </button>
+        <button disabled={!valid} className="h-9 rounded-lg bg-navy text-xs font-bold text-white disabled:opacity-40">
+          Send invite
+        </button>
+      </div>
+    </form>
   );
 }

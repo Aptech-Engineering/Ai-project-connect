@@ -5,12 +5,14 @@ import Link from "next/link";
 import { AnimatePresence, motion, useAnimationControls } from "framer-motion";
 import { AlertCircle, ArrowLeft, ArrowRight, Eye, EyeOff, GitPullRequestArrow, Layers, Loader2, Lock, ShieldCheck, User } from "lucide-react";
 import Logo from "../Logo";
-import { STAFF_LOGIN, STAFF_PASSWORD } from "@/lib/data";
+import { findUserByEmail, updateStaffUser, verifyPassword, type StaffUser } from "@/lib/staff";
 import { cn } from "@/lib/format";
+import { ForgotPassword, ResetPassword } from "./PasswordRecovery";
 
 const MAX_ATTEMPTS = 5;
 
-export default function StaffLogin({ onSuccess }: { onSuccess: (login: string) => void }) {
+export default function StaffLogin({ onSuccess, resetToken, onResetDone }: { onSuccess: (user: StaffUser) => void; resetToken?: string | null; onResetDone?: () => void }) {
+  const [view, setView] = useState<"login" | "forgot">("login");
   const [login, setLogin] = useState("");
   const [password, setPassword] = useState("");
   const [show, setShow] = useState(false);
@@ -34,21 +36,26 @@ export default function StaffLogin({ onSuccess }: { onSuccess: (login: string) =
     return () => window.clearInterval(t);
   }, [lockedUntil]);
 
-  const submit = (e: React.FormEvent) => {
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (busy || lockedFor > 0) return;
     if (!login.trim() || !password) {
-      setError("Enter your staff login and password.");
+      setError("Enter your work email and password.");
       shake.start({ x: [0, -10, 10, -7, 7, -3, 0], transition: { duration: 0.45 } });
       return;
     }
     setBusy(true);
     setError("");
-    window.setTimeout(() => {
-      if (login.trim().toLowerCase() === STAFF_LOGIN && password === STAFF_PASSWORD) {
-        onSuccess(login.trim().toLowerCase());
-        return;
-      }
+    // "aptechdevteam.com" was the original demo login; it now maps to the admin account.
+    const email = login.trim().toLowerCase() === "aptechdevteam.com" ? "admin@aptechdevteam.com" : login;
+    const user = findUserByEmail(email);
+    const [valid] = await Promise.all([user ? verifyPassword(user, password) : Promise.resolve(false), new Promise((res) => window.setTimeout(res, 700))]);
+    if (user && valid && user.status === "active") {
+      updateStaffUser(user.id, { lastLoginAt: new Date().toISOString() });
+      onSuccess(user);
+      return;
+    }
+    {
       setBusy(false);
       shake.start({ x: [0, -10, 10, -7, 7, -3, 0], transition: { duration: 0.45 } });
       setPassword("");
@@ -60,9 +67,9 @@ export default function StaffLogin({ onSuccess }: { onSuccess: (login: string) =
         setError("Too many failed attempts. Sign-in is locked for 30 seconds.");
       } else {
         setAttempts(n);
-        setError(`Incorrect login or password. ${MAX_ATTEMPTS - n} attempt${MAX_ATTEMPTS - n === 1 ? "" : "s"} left.`);
+        setError(`Incorrect email or password. ${MAX_ATTEMPTS - n} attempt${MAX_ATTEMPTS - n === 1 ? "" : "s"} left.`);
       }
-    }, 900);
+    }
   };
 
   return (
@@ -137,6 +144,11 @@ export default function StaffLogin({ onSuccess }: { onSuccess: (login: string) =
         </div>
 
         <div className="mx-auto flex w-full max-w-sm flex-1 flex-col justify-center py-12">
+          {resetToken ? (
+            <ResetPassword token={resetToken} onDone={() => onResetDone?.()} />
+          ) : view === "forgot" ? (
+            <ForgotPassword onBack={() => setView("login")} />
+          ) : (
           <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}>
             <span className="grid size-12 place-items-center rounded-2xl bg-brand-soft">
               <Lock className="size-6 text-brand-700" />
@@ -150,7 +162,7 @@ export default function StaffLogin({ onSuccess }: { onSuccess: (login: string) =
               noValidate
               className="mt-8 space-y-4"
             >
-              <Field label="Staff login" htmlFor="staff-login">
+              <Field label="Work email" htmlFor="staff-login">
                 <User className="size-5 text-muted" />
                 <input
                   id="staff-login"
@@ -162,12 +174,17 @@ export default function StaffLogin({ onSuccess }: { onSuccess: (login: string) =
                   autoComplete="username"
                   autoFocus
                   spellCheck={false}
-                  placeholder="Your staff login"
+                  placeholder="you@aptech.com"
                   disabled={lockedFor > 0}
                   className="h-12 w-full bg-transparent outline-none placeholder:text-muted/70"
                 />
               </Field>
 
+              <div className="-mb-2 flex justify-end">
+                <button type="button" onClick={() => setView("forgot")} className="text-xs font-bold text-brand-700 hover:underline">
+                  Forgot password?
+                </button>
+              </div>
               <Field label="Password" htmlFor="staff-password">
                 <Lock className="size-5 text-muted" />
                 <input
@@ -230,6 +247,7 @@ export default function StaffLogin({ onSuccess }: { onSuccess: (login: string) =
               <ShieldCheck className="size-4 text-teal" /> Sessions end when you close the browser tab.
             </p>
           </motion.div>
+          )}
         </div>
       </main>
     </div>

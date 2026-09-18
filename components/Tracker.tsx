@@ -2,13 +2,16 @@
 
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion, useAnimationControls } from "framer-motion";
-import { AlertCircle, ArrowDown, ArrowLeft, ArrowRight, CheckCircle2, Clock, Lightbulb, Loader2, Lock, Search, ShieldCheck, XCircle } from "lucide-react";
+import { AlertCircle, ArrowDown, ArrowLeft, ArrowRight, CheckCircle2, Clock, Lightbulb, Loader2, Lock, Search, ShieldCheck, Wallet, XCircle } from "lucide-react";
+import { feeState, paidPayment } from "@/lib/wallet";
+import { formatPrice } from "@/lib/catalog";
 import { DEMO_IDS, DEMO_OTP, STAGES } from "@/lib/data";
 import { findProject, findRevoked } from "@/lib/store";
 import { lookupIdea } from "@/lib/actions";
 import { IDEA_STATUSES, type Idea } from "@/lib/ideas";
 import type { Project } from "@/lib/types";
 import { cn } from "@/lib/format";
+import { useSiteContent } from "@/lib/content";
 
 const ID_PATTERN = /^APC-\d{2}-[A-Z0-9]{5}$/;
 const IDEA_PATTERN = /^IDEA-[A-Z0-9]{5}$/;
@@ -79,6 +82,7 @@ export default function Tracker({
 }
 
 function IdStep({ onFound, onIdea }: { onFound: (p: Project) => void; onIdea: (r: { idea: Idea; project?: Project }) => void }) {
+  const { hero } = useSiteContent();
   const [value, setValue] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -152,7 +156,7 @@ function IdStep({ onFound, onIdea }: { onFound: (p: Project) => void; onIdea: (r
       noValidate
     >
       <label htmlFor="project-id" className="flex items-center justify-between px-3 pb-2 pt-2 text-sm">
-        <span className="font-display font-semibold text-white">Check your project status</span>
+        <span className="font-display font-semibold text-white">{hero.trackerLabel}</span>
         <span className="hidden items-center gap-1 text-xs text-white/50 sm:flex">
           <Lock className="size-3" /> Encrypted
         </span>
@@ -175,7 +179,7 @@ function IdStep({ onFound, onIdea }: { onFound: (p: Project) => void; onIdea: (r
               setValue(formatId(e.target.value));
               if (error && !lockedFor) setError("");
             }}
-            placeholder="Project ID (APC-26-7KQ9X) or idea reference"
+            placeholder={hero.trackerPlaceholder}
             autoComplete="off"
             spellCheck={false}
             inputMode="text"
@@ -199,7 +203,7 @@ function IdStep({ onFound, onIdea }: { onFound: (p: Project) => void; onIdea: (r
             <>Try again in {lockedFor}s</>
           ) : (
             <>
-              Track project <ArrowRight className="size-4 transition group-hover:translate-x-1" />
+              {hero.trackerButton} <ArrowRight className="size-4 transition group-hover:translate-x-1" />
             </>
           )}
         </button>
@@ -220,6 +224,7 @@ function IdStep({ onFound, onIdea }: { onFound: (p: Project) => void; onIdea: (r
         </AnimatePresence>
       </div>
 
+      {hero.showDemoIds && (
       <div className="flex flex-wrap items-center gap-2 px-3 pb-2 pt-3">
         <span className="text-xs text-white/50">Try a demo ID:</span>
         {DEMO_IDS.map((d) => (
@@ -234,6 +239,7 @@ function IdStep({ onFound, onIdea }: { onFound: (p: Project) => void; onIdea: (r
           </button>
         ))}
       </div>
+      )}
     </form>
   );
 }
@@ -427,12 +433,36 @@ function DoneStep({ project, onReset }: { project: Project; onReset: () => void 
 }
 
 const IDEA_MESSAGES: Record<Idea["status"], string> = {
+  DRAFT: "This application isn't submitted yet. Use the link we emailed you to finish it and fund your project wallet.",
   NEW: "We've received your idea. Our team will start reviewing it shortly.",
   REVIEWING: "Our engineers are assessing your idea and choosing the right tech stack.",
-  QUOTE_SENT: "We've emailed you a proposal and quote. Reply to accept and we'll register your project.",
+  QUOTE_SENT: "We've emailed you a proposal and quote. Accept it online and we'll register your project straight away.",
   ACCEPTED: "Your project is registered! We sent your Project ID by email and SMS.",
   DECLINED: "We're not able to take on this idea right now. Check your email for details.",
 };
+
+/** Commitment fee status for the idea tracker. */
+function FeeLine({ idea }: { idea: Idea }) {
+  const paid = paidPayment(idea);
+  const state = feeState(idea);
+  const text = paid?.refund
+    ? paid.refund.status === "REFUNDED"
+      ? `Your ${formatPrice(paid.amount, paid.currency)} commitment fee was refunded.`
+      : `Your ${formatPrice(paid.amount, paid.currency)} commitment fee is being refunded.`
+    : state === "PAID"
+      ? `Commitment fee paid · receipt ${paid?.receiptNo}`
+      : state === "AWAITING_CONFIRMATION"
+        ? "We're confirming your commitment fee transfer."
+        : idea.status === "DRAFT"
+          ? "Commitment fee not paid yet."
+          : null;
+  if (!text) return null;
+  return (
+    <p className="mt-3 flex items-center gap-2 rounded-xl bg-white/5 px-3 py-2 text-xs text-white/70">
+      <Wallet className="size-4 shrink-0 text-brand" /> {text}
+    </p>
+  );
+}
 
 function IdeaStep({ result, onBack, onTrack }: { result: { idea: Idea; project?: Project }; onBack: () => void; onTrack: (p: Project) => void }) {
   const { idea, project } = result;
@@ -452,9 +482,9 @@ function IdeaStep({ result, onBack, onTrack }: { result: { idea: Idea; project?:
         </button>
       </div>
 
-      {idea.status === "DECLINED" ? (
+      {idea.status === "DECLINED" || idea.status === "DRAFT" ? (
         <p className="mt-4 flex items-center gap-2 rounded-xl bg-white/5 p-3 text-sm text-white/80">
-          <XCircle className="size-5 shrink-0 text-[#ffb4a8]" /> {IDEA_MESSAGES.DECLINED}
+          {idea.status === "DRAFT" ? <Clock className="size-5 shrink-0 text-brand" /> : <XCircle className="size-5 shrink-0 text-[#ffb4a8]" />} {IDEA_MESSAGES[idea.status]}
         </p>
       ) : (
         <>
@@ -473,6 +503,16 @@ function IdeaStep({ result, onBack, onTrack }: { result: { idea: Idea; project?:
         </>
       )}
 
+      <FeeLine idea={idea} />
+
+      {idea.status === "QUOTE_SENT" && idea.quote?.status === "sent" && (
+        <div className="mt-4 flex flex-col gap-2 border-t border-white/10 pt-3 sm:flex-row sm:items-center sm:justify-between">
+          <span className="text-xs text-white/50">Your proposal was emailed to you. Demo: open it here.</span>
+          <a href={`/quote?ref=${encodeURIComponent(idea.ref)}&token=${encodeURIComponent(idea.quote.token)}`} className="flex items-center justify-center gap-1.5 rounded-xl bg-brand px-4 py-2.5 text-sm font-bold text-white hover:bg-brand-600">
+            Review proposal <ArrowRight className="size-4" />
+          </a>
+        </div>
+      )}
       {project && (
         <div className="mt-4 flex flex-col gap-2 border-t border-white/10 pt-3 sm:flex-row sm:items-center sm:justify-between">
           <span className="text-xs text-white/50">Demo: the Project ID from that email is {project.code}</span>

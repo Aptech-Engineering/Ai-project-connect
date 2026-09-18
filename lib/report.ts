@@ -1,5 +1,7 @@
 import { jsPDF } from "jspdf";
-import { COURSES, STAGES, TECHNOLOGIES, TIMELINE, clientUpdates, timelineStep } from "./data";
+import { STAGES, TIMELINE, clientUpdates, timelineStep } from "./data";
+import { findCourse, findTechnology } from "./catalog";
+import { stageMeaning } from "./content";
 import { formatDate } from "./format";
 import type { Project, SharedFile, Tone } from "./types";
 
@@ -179,7 +181,7 @@ export async function downloadProjectReport(project: Project) {
   y += 18;
 
   // Meaning / hold reason
-  const note = project.stage === "ON_HOLD" && project.holdReason ? `Paused: ${project.holdReason}` : stage.meaning;
+  const note = project.stage === "ON_HOLD" && project.holdReason ? `Paused: ${project.holdReason}` : stageMeaning(project.stage);
   const noteLines = doc.splitTextToSize(clean(note), CONTENT_W - 12);
   const noteH = noteLines.length * 4.6 + 8;
   const noteBg = project.stage === "ON_HOLD" ? RED_SOFT : project.stage === "DELIVERED" ? TEAL_SOFT : ORANGE_SOFT;
@@ -276,7 +278,8 @@ export async function downloadProjectReport(project: Project) {
   // Stack
   sectionTitle("What your app is built with");
   project.stack.forEach(({ techId, usage }) => {
-    const t = TECHNOLOGIES[techId];
+    const t = findTechnology(techId);
+    if (!t) return;
     doc.setFont("helvetica", "normal");
     doc.setFontSize(9.5);
     const lines = doc.splitTextToSize(clean(t.plain), CONTENT_W - 50);
@@ -298,7 +301,7 @@ export async function downloadProjectReport(project: Project) {
     y += h + 3;
   });
 
-  const courseIds = [...new Set(project.stack.map((s) => TECHNOLOGIES[s.techId].courseId))];
+  const courseIds = [...new Set(project.stack.map((s) => findTechnology(s.techId)?.courseId).filter((id): id is string => Boolean(id && findCourse(id)?.published)))];
   y += 3;
   ensure(12 + courseIds.length * 5);
   doc.setFont("helvetica", "bold");
@@ -309,7 +312,7 @@ export async function downloadProjectReport(project: Project) {
   doc.setFont("helvetica", "normal");
   doc.setTextColor(...NAVY);
   courseIds.forEach((id) => {
-    const c = COURSES[id];
+    const c = findCourse(id)!;
     doc.text(clean(`- ${c.title} (${c.duration}, starts ${formatDate(c.nextStart)})`), M, y);
     y += 5;
   });
@@ -353,4 +356,13 @@ export async function downloadMockFile(project: Project, file: SharedFile) {
   }
   footers(doc);
   doc.save(file.name);
+}
+
+/** Downloads a shared file: the real upload if one was stored, otherwise a generated sample. */
+export async function downloadSharedFile(project: Project, file: SharedFile) {
+  if (file.blobId) {
+    const { openStoredFile } = await import("./files");
+    if (await openStoredFile(file.blobId, file.name, "download")) return;
+  }
+  await downloadMockFile(project, file);
 }

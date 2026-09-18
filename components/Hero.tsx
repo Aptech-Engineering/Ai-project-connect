@@ -5,10 +5,11 @@ import { motion } from "framer-motion";
 import { KeyRound, MessageSquareText, GraduationCap } from "lucide-react";
 import Tracker from "./Tracker";
 import HeroVisual from "./HeroVisual";
-import { TECHNOLOGIES } from "@/lib/data";
+import { useTechnologies } from "@/lib/catalog";
+import { useSiteContent } from "@/lib/content";
 import type { Project } from "@/lib/types";
 
-const TITLE_LINES = [["We", "build", "your", "idea."], ["You", "watch", "it"]];
+const TRUST_ICONS = [KeyRound, MessageSquareText, GraduationCap];
 
 export default function Hero({
   onVerified,
@@ -20,6 +21,8 @@ export default function Hero({
   verifiedProject?: Project;
 }) {
   const ref = useRef<HTMLElement>(null);
+  const { hero } = useSiteContent();
+  const titleLines = [hero.titleLine1, hero.titleLine2].map((l) => l.split(/\s+/).filter(Boolean));
 
   const onPointerMove = (e: React.PointerEvent) => {
     const el = ref.current;
@@ -51,34 +54,35 @@ export default function Hero({
               <span className="absolute inline-flex size-full animate-ping rounded-full bg-brand opacity-75" />
               <span className="relative inline-flex size-2 rounded-full bg-brand" />
             </span>
-            Live build tracking by Aptech engineers
+            {hero.eyebrow}
           </motion.span>
 
           <h1 className="mt-6 font-display text-[2.6rem] font-extrabold leading-[1.05] tracking-tight sm:text-6xl lg:text-[4.1rem]">
-            {TITLE_LINES.map((line, li) => (
+            {titleLines.map((line, li) => (
               <span key={li} className="block">
                 {line.map((w) => {
                   const i = wordIndex++;
-                  return (
+                  return [
                     <motion.span
                       key={w + i}
-                      className="mr-[0.25em] inline-block"
+                      className="inline-block"
                       initial={{ opacity: 0, y: 28, filter: "blur(8px)" }}
                       animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
                       transition={{ delay: 0.1 + i * 0.07, duration: 0.55, ease: [0.22, 1, 0.36, 1] }}
                     >
                       {w}
-                    </motion.span>
-                  );
+                    </motion.span>,
+                    " ",
+                  ];
                 })}
-                {li === 1 && (
+                {li === 1 && hero.highlight && (
                   <motion.span
                     className="relative inline-block text-brand"
                     initial={{ opacity: 0, y: 28, scale: 0.9 }}
                     animate={{ opacity: 1, y: 0, scale: 1 }}
                     transition={{ delay: 0.75, type: "spring", stiffness: 260, damping: 18 }}
                   >
-                    grow.
+                    {hero.highlight}
                     <svg className="absolute -bottom-2 left-0 w-full" viewBox="0 0 200 16" fill="none" aria-hidden>
                       <motion.path
                         d="M3 11 C 50 3, 120 3, 197 9"
@@ -102,8 +106,7 @@ export default function Hero({
             transition={{ delay: 0.9 }}
             className="mt-6 max-w-xl text-lg leading-relaxed text-blue-soft/75"
           >
-            <span className="font-bold text-white">Then you learn the stack behind it.</span> Enter your Project ID to see your
-            product&apos;s stage, progress and latest updates, written in plain language.
+            {hero.subtitleLead && <span className="font-bold text-white">{hero.subtitleLead}</span>} {hero.subtitle}
           </motion.p>
 
           <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 1.05 }} className="mt-8">
@@ -116,11 +119,7 @@ export default function Hero({
             variants={{ show: { transition: { staggerChildren: 0.08, delayChildren: 1.3 } } }}
             className="mt-7 flex flex-wrap gap-x-6 gap-y-3 text-sm text-white/65"
           >
-            {[
-              { icon: KeyRound, text: "Project ID + one-time code" },
-              { icon: MessageSquareText, text: "No jargon, ever" },
-              { icon: GraduationCap, text: "Learn what built your app" },
-            ].map(({ icon: Icon, text }) => (
+            {hero.trustPoints.filter(Boolean).map((text, i) => ({ icon: TRUST_ICONS[i % TRUST_ICONS.length], text })).map(({ icon: Icon, text }) => (
               <motion.li key={text} variants={{ hidden: { opacity: 0, y: 8 }, show: { opacity: 1, y: 0 } }} className="flex items-center gap-2">
                 <Icon className="size-4 text-teal" /> {text}
               </motion.li>
@@ -128,7 +127,7 @@ export default function Hero({
           </motion.ul>
         </div>
 
-        <HeroVisual />
+        {hero.showPreviewCard && <HeroVisual />}
       </div>
 
       <StackMarquee />
@@ -185,15 +184,17 @@ function Backdrop() {
 }
 
 function StackMarquee() {
-  const techs = Object.values(TECHNOLOGIES);
+  const techs = useTechnologies();
+  const { hero } = useSiteContent();
+  if (techs.length === 0) return null;
   const row = [...techs, ...techs];
   return (
     <div id="learn" className="relative border-t border-white/10 bg-navy-950/40 py-5 backdrop-blur-sm">
       <div className="container-page flex items-center gap-6">
         <p className="hidden shrink-0 text-xs font-bold uppercase tracking-[0.14em] text-white/50 md:block">
-          Stacks we build with
+          {hero.marqueeTitle}
           <br />
-          <span className="text-brand">and teach at Aptech</span>
+          <span className="text-brand">{hero.marqueeSubtitle}</span>
         </p>
         <div className="relative flex-1 overflow-hidden [mask-image:linear-gradient(90deg,transparent,black_10%,black_90%,transparent)]">
           <div className="flex w-max animate-marquee gap-3 hover:[animation-play-state:paused]">

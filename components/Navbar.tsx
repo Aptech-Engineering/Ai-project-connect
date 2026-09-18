@@ -5,16 +5,13 @@ import { AnimatePresence, motion } from "framer-motion";
 import { LogOut, Menu, Sparkles, X } from "lucide-react";
 import Logo from "./Logo";
 import { cn, initials } from "@/lib/format";
-
-const LINKS = [
-  { href: "#track", label: "Track a project" },
-  { href: "#learn", label: "Learn the stack" },
-  { href: "#contact", label: "Contact" },
-];
+import { useSiteContent } from "@/lib/content";
+import { AnnouncementBar, SiteLink } from "./HomeSections";
 
 export default function Navbar({ client, onSignOut, onSubmitIdea }: { client?: string; onSignOut: () => void; onSubmitIdea: () => void }) {
   const [scrolled, setScrolled] = useState(false);
   const [open, setOpen] = useState(false);
+  const { nav } = useSiteContent();
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 24);
@@ -35,16 +32,17 @@ export default function Navbar({ client, onSignOut, onSubmitIdea }: { client?: s
         scrolled ? "border-b border-white/10 bg-navy/85 shadow-lg shadow-navy-950/20 backdrop-blur-xl" : "bg-transparent",
       )}
     >
+      <AnnouncementBar onSubmitIdea={onSubmitIdea} />
       <nav className="container-page flex h-16 items-center justify-between gap-4">
         <a href="#top" aria-label="AI Project Connect home">
           <Logo />
         </a>
 
         <div className="hidden items-center gap-1 md:flex">
-          {LINKS.map((l) => (
-            <a key={l.href} href={l.href} className="rounded-full px-4 py-2 text-sm text-white/70 transition hover:bg-white/5 hover:text-white">
+          {nav.links.map((l) => (
+            <SiteLink key={l.label + l.href} href={l.href} onSubmitIdea={onSubmitIdea} className="rounded-full px-4 py-2 text-sm text-white/70 transition hover:bg-white/5 hover:text-white">
               {l.label}
-            </a>
+            </SiteLink>
           ))}
         </div>
 
@@ -64,7 +62,7 @@ export default function Navbar({ client, onSignOut, onSubmitIdea }: { client?: s
               onClick={submitIdea}
               className="group flex items-center gap-2 rounded-full bg-brand px-5 py-2.5 text-sm font-bold text-white shadow-lg shadow-brand/25 transition hover:bg-brand-600"
             >
-              <Sparkles className="size-4 transition group-hover:rotate-12" /> Submit your idea
+              <Sparkles className="size-4 transition group-hover:rotate-12" /> {nav.ctaLabel}
             </button>
           )}
         </div>
@@ -83,10 +81,10 @@ export default function Navbar({ client, onSignOut, onSubmitIdea }: { client?: s
             className="overflow-hidden border-t border-white/10 bg-navy md:hidden"
           >
             <div className="container-page flex flex-col gap-1 py-4">
-              {LINKS.map((l) => (
-                <a key={l.href} href={l.href} onClick={() => setOpen(false)} className="rounded-xl px-3 py-3 text-white/80 hover:bg-white/5">
+              {nav.links.map((l) => (
+                <SiteLink key={l.label + l.href} href={l.href} onSubmitIdea={onSubmitIdea} onClick={() => setOpen(false)} className="rounded-xl px-3 py-3 text-white/80 hover:bg-white/5">
                   {l.label}
-                </a>
+                </SiteLink>
               ))}
               {client ? (
                 <button
@@ -100,7 +98,7 @@ export default function Navbar({ client, onSignOut, onSubmitIdea }: { client?: s
                 </button>
               ) : (
                 <button onClick={submitIdea} className="mt-2 flex items-center justify-center gap-2 rounded-full bg-brand py-3 font-bold text-white">
-                  <Sparkles className="size-4" /> Submit your idea
+                  <Sparkles className="size-4" /> {nav.ctaLabel}
                 </button>
               )}
             </div>

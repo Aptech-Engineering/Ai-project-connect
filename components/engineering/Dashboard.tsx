@@ -11,6 +11,12 @@ import {
   Clock,
   FolderKanban,
   Inbox,
+  BarChart3,
+  History,
+  UserPlus,
+  KeyRound,
+  UsersRound,
+  Globe,
   BellRing,
   GraduationCap,
   MessageCircle,
@@ -28,6 +34,7 @@ import StageBadge from "../status/StageBadge";
 import ProjectWorkspace from "./ProjectWorkspace";
 import IdeasInbox from "./IdeasInbox";
 import { resetIdeas, useIdeas } from "@/lib/ideas";
+import { clearFiles } from "@/lib/files";
 import { STAGES, STAGE_MIN_PROGRESS, STALE_DAYS, isClientVisible } from "@/lib/data";
 import { resetStore, updateProject, useLeads, useOutbox, useProjects, withActivity } from "@/lib/store";
 import { announceStage, announceUpdate } from "@/lib/actions";
@@ -35,33 +42,43 @@ import { LeadsQueue, MessagesInbox, Outbox } from "./Queues";
 import { cn, initials, relativeDay } from "@/lib/format";
 import type { Project, StageKey } from "@/lib/types";
 import type { Notify } from "../PortalApp";
-import type { StaffSession } from "./EngineeringApp";
-import { actingAs, daysSinceClientUpdate, isStale, type StaffRole } from "./helpers";
+import { actingAs, canLead, daysSinceClientUpdate, isStale, type StaffRole } from "./helpers";
+import UsersManager, { AccountDialog } from "./UsersManager";
+import Reports from "./Reports";
+import ActivityLogView from "./ActivityLogView";
+import RegisterProjectDrawer from "./RegisterProjectDrawer";
+import PaymentsView from "./PaymentsView";
+import SettingsScreen from "./SettingsScreen";
+import { SlidersHorizontal } from "lucide-react";
+import { Wallet as WalletIcon } from "lucide-react";
+import { feeSummary } from "@/lib/wallet";
+import { ROLES, canLeadProject, canViewProject, useStaff } from "@/lib/staff";
+import ContentManager from "./cms/ContentManager";
+import { stageMeaning } from "@/lib/content";
 
-type View = "projects" | "approvals" | "ideas" | "messages" | "leads" | "outbox";
+type View = "projects" | "approvals" | "ideas" | "messages" | "leads" | "outbox" | "website" | "users" | "reports" | "activity" | "payments" | "settings";
 
 const BOARD: StageKey[] = ["UNDER_REVIEW", "DESIGN", "DEVELOPMENT", "TESTING", "DEPLOYMENT", "DELIVERED", "ON_HOLD"];
 
-export default function Dashboard({
-  session,
-  onRoleChange,
-  onSignOut,
-  notify,
-}: {
-  session: StaffSession;
-  onRoleChange: (role: StaffRole) => void;
-  onSignOut: () => void;
-  notify: Notify;
-}) {
-  const projects = useProjects();
-  const [view, setView] = useState<View>("projects");
+export default function Dashboard({ onSignOut, notify }: { onSignOut: () => void; notify: Notify }) {
+  const me = useStaff();
+  const session = { role: me.role };
+  const allProjects = useProjects();
+  const projects = allProjects.filter((p) => canViewProject(me, p));
+  const isTeam = me.role !== "counsellor";
+  const [view, setView] = useState<View>(isTeam ? "projects" : "leads");
+  const [accountOpen, setAccountOpen] = useState(Boolean(me.mustChangePassword));
   const [layout, setLayout] = useState<"list" | "board">("list");
   const [selected, setSelected] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [stageFilter, setStageFilter] = useState<StageKey | "ALL">("ALL");
   const [menuOpen, setMenuOpen] = useState(false);
 
-  const newIdeas = useIdeas().filter((i) => i.status === "NEW").length;
+  const allIdeas = useIdeas();
+  const newIdeas = allIdeas.filter((i) => i.status === "NEW").length;
+  const fees = feeSummary(allIdeas);
+  const paymentTasks = fees.awaiting + fees.refundsDue;
+  const [ideaFocus, setIdeaFocus] = useState<{ filter?: "DRAFT"; id?: string; n: number }>({ n: 0 });
   const needsReply = projects.filter((p) => p.messages?.length && p.messages[p.messages.length - 1].from === "client").length;
   const newLeads = useLeads().filter((l) => l.status === "NEW").length;
   const outboxCount = useOutbox().length;
@@ -77,14 +94,18 @@ export default function Dashboard({
 
   const nav = (
     <nav className="flex flex-col gap-1">
+      {isTeam && (
+      <>
       <NavItem active={view === "projects" && !selected} onClick={() => go("projects")} icon={<FolderKanban className="size-5" />}>
         Projects
         <span className="ml-auto rounded-full bg-white/10 px-2 py-0.5 text-xs">{projects.length}</span>
       </NavItem>
-      <NavItem active={view === "ideas" && !selected} onClick={() => go("ideas")} icon={<Lightbulb className="size-5" />}>
-        Ideas
-        {newIdeas > 0 && <span className="ml-auto rounded-full bg-brand px-2 py-0.5 text-xs font-bold text-white">{newIdeas} new</span>}
-      </NavItem>
+      {canLead(me.role) && (
+        <NavItem active={view === "ideas" && !selected} onClick={() => go("ideas")} icon={<Lightbulb className="size-5" />}>
+          Ideas
+          {newIdeas > 0 && <span className="ml-auto rounded-full bg-brand px-2 py-0.5 text-xs font-bold text-white">{newIdeas} new</span>}
+        </NavItem>
+      )}
       <NavItem active={view === "approvals" && !selected} onClick={() => go("approvals")} icon={<Inbox className="size-5" />}>
         Approvals
         {pendingCount > 0 && <span className="ml-auto rounded-full bg-brand px-2 py-0.5 text-xs font-bold text-white">{pendingCount}</span>}
@@ -93,14 +114,42 @@ export default function Dashboard({
         Client messages
         {needsReply > 0 && <span className="ml-auto rounded-full bg-brand px-2 py-0.5 text-xs font-bold text-white">{needsReply}</span>}
       </NavItem>
+      </>
+      )}
+      {(me.role === "admin" || me.role === "counsellor") && (
       <NavItem active={view === "leads" && !selected} onClick={() => go("leads")} icon={<GraduationCap className="size-5" />}>
         Course leads
         {newLeads > 0 && <span className="ml-auto rounded-full bg-teal px-2 py-0.5 text-xs font-bold text-white">{newLeads} new</span>}
       </NavItem>
-      <NavItem active={view === "outbox" && !selected} onClick={() => go("outbox")} icon={<BellRing className="size-5" />}>
-        Notifications
-        {outboxCount > 0 && <span className="ml-auto rounded-full bg-white/10 px-2 py-0.5 text-xs">{outboxCount}</span>}
-      </NavItem>
+      )}
+      {me.role === "admin" && (
+        <>
+          <NavItem active={view === "outbox" && !selected} onClick={() => go("outbox")} icon={<BellRing className="size-5" />}>
+            Notifications
+            {outboxCount > 0 && <span className="ml-auto rounded-full bg-white/10 px-2 py-0.5 text-xs">{outboxCount}</span>}
+          </NavItem>
+          <p className="mt-4 px-3 pb-1 text-[11px] font-bold uppercase tracking-wider text-white/40">Admin</p>
+          <NavItem active={view === "reports" && !selected} onClick={() => go("reports")} icon={<BarChart3 className="size-5" />}>
+            Reports
+          </NavItem>
+          <NavItem active={view === "payments" && !selected} onClick={() => go("payments")} icon={<WalletIcon className="size-5" />}>
+            Payments
+            {paymentTasks > 0 && <span className="ml-auto rounded-full bg-brand px-2 py-0.5 text-xs font-bold text-white">{paymentTasks}</span>}
+          </NavItem>
+          <NavItem active={view === "settings" && !selected} onClick={() => go("settings")} icon={<SlidersHorizontal className="size-5" />}>
+            Settings
+          </NavItem>
+          <NavItem active={view === "activity" && !selected} onClick={() => go("activity")} icon={<History className="size-5" />}>
+            Activity log
+          </NavItem>
+          <NavItem active={view === "website" && !selected} onClick={() => go("website")} icon={<Globe className="size-5" />}>
+            Website content
+          </NavItem>
+          <NavItem active={view === "users" && !selected} onClick={() => go("users")} icon={<UsersRound className="size-5" />}>
+            Users & roles
+          </NavItem>
+        </>
+      )}
       <Link href="/" target="_blank" className="mt-3 flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-white/65 transition hover:bg-white/5 hover:text-white">
         <ArrowUpRight className="size-5" /> Open client portal
       </Link>
@@ -108,33 +157,28 @@ export default function Dashboard({
   );
 
   const account = (
-    <div className="space-y-3">
-      <div className="rounded-2xl bg-white/5 p-3">
-        <p className="text-[11px] font-bold uppercase tracking-wider text-white/45">Acting as</p>
-        <div className="relative mt-2 grid grid-cols-2 rounded-xl bg-navy-950/60 p-1 text-xs font-bold">
-          {(["lead", "engineer"] as const).map((r) => (
-            <button
-              key={r}
-              onClick={() => {
-                onRoleChange(r);
-                notify(r === "lead" ? "Now acting as Project lead: you can change stages and approve updates." : "Now acting as Engineer: client updates need lead approval.", "info");
-              }}
-              className={cn("relative rounded-lg py-2 transition", session.role === r ? "text-navy" : "text-white/60 hover:text-white")}
-            >
-              {session.role === r && <motion.span layoutId="role-pill" className="absolute inset-0 rounded-lg bg-white" />}
-              <span className="relative">{r === "lead" ? "Project lead" : "Engineer"}</span>
-            </button>
-          ))}
+    <div className="space-y-2">
+      <div className="flex items-center gap-3 rounded-2xl bg-white/5 p-3">
+        <span className="grid size-10 shrink-0 place-items-center rounded-full bg-brand font-display text-sm font-bold text-white">
+          {me.name
+            .split(/\s+/)
+            .map((w) => w[0])
+            .slice(0, 2)
+            .join("")
+            .toUpperCase()}
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-bold text-white">{me.name}</p>
+          <p className="truncate text-xs text-white/50">{me.email}</p>
+          <span className="mt-1 inline-block rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white/80">{ROLES[me.role].label}</span>
         </div>
       </div>
-      <div className="flex items-center gap-3 px-1">
-        <span className="grid size-10 place-items-center rounded-full bg-brand font-display text-sm font-bold text-white">AD</span>
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-bold text-white">Aptech Dev Team</p>
-          <p className="truncate text-xs text-white/50">{session.login}</p>
-        </div>
-        <button onClick={onSignOut} aria-label="Sign out" title="Sign out" className="rounded-lg p-2 text-white/60 hover:bg-white/10 hover:text-white">
-          <LogOut className="size-5" />
+      <div className="grid grid-cols-2 gap-2">
+        <button onClick={() => setAccountOpen(true)} className="flex items-center justify-center gap-1.5 rounded-xl px-3 py-2 text-xs font-bold text-white/70 hover:bg-white/10 hover:text-white">
+          <KeyRound className="size-4" /> Password
+        </button>
+        <button onClick={onSignOut} className="flex items-center justify-center gap-1.5 rounded-xl px-3 py-2 text-xs font-bold text-white/70 hover:bg-white/10 hover:text-white">
+          <LogOut className="size-4" /> Sign out
         </button>
       </div>
     </div>
@@ -181,19 +225,49 @@ export default function Dashboard({
               <motion.div key={selectedProject.code} initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} transition={{ duration: 0.25 }}>
                 <ProjectWorkspace project={selectedProject} role={session.role} onBack={() => setSelected(null)} onCodeChange={setSelected} notify={notify} />
               </motion.div>
-            ) : view === "ideas" ? (
+            ) : view === "ideas" && canLead(me.role) ? (
               <motion.div key="ideas" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
-                <IdeasInbox role={session.role} notify={notify} onOpenProject={setSelected} />
+                <IdeasInbox key={ideaFocus.n} role={session.role} notify={notify} onOpenProject={setSelected} initialFilter={ideaFocus.filter} initialSelectedId={ideaFocus.id} />
+              </motion.div>
+            ) : view === "payments" && me.role === "admin" ? (
+              <motion.div key="payments" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+                <PaymentsView
+                  notify={notify}
+                  onOpenIdea={(id) => {
+                    setIdeaFocus((f) => ({ id, n: f.n + 1 }));
+                    go("ideas");
+                  }}
+                />
+              </motion.div>
+            ) : view === "settings" && me.role === "admin" ? (
+              <motion.div key="settings" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+                <SettingsScreen notify={notify} />
+              </motion.div>
+            ) : view === "reports" && me.role === "admin" ? (
+              <motion.div key="reports" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+                <Reports notify={notify} onOpenProject={setSelected} />
+              </motion.div>
+            ) : view === "activity" && me.role === "admin" ? (
+              <motion.div key="activity" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+                <ActivityLogView onOpenProject={setSelected} />
+              </motion.div>
+            ) : view === "users" && me.role === "admin" ? (
+              <motion.div key="users" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+                <UsersManager notify={notify} projects={allProjects} />
+              </motion.div>
+            ) : view === "leads" && (me.role === "admin" || me.role === "counsellor") ? (
+              <motion.div key="leads" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+                <LeadsQueue notify={notify} />
+              </motion.div>
+            ) : !isTeam ? null : view === "website" && me.role === "admin" ? (
+              <motion.div key="website" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+                <ContentManager notify={notify} />
               </motion.div>
             ) : view === "messages" ? (
               <motion.div key="messages" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
                 <MessagesInbox role={session.role} notify={notify} onOpen={setSelected} />
               </motion.div>
-            ) : view === "leads" ? (
-              <motion.div key="leads" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
-                <LeadsQueue notify={notify} />
-              </motion.div>
-            ) : view === "outbox" ? (
+            ) : view === "outbox" && me.role === "admin" ? (
               <motion.div key="outbox" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
                 <Outbox />
               </motion.div>
@@ -215,6 +289,10 @@ export default function Dashboard({
                   setStageFilter={setStageFilter}
                   onOpen={setSelected}
                   onApprovals={() => go("approvals")}
+                  onOpenDrafts={() => {
+                    setIdeaFocus((f) => ({ filter: "DRAFT", n: f.n + 1 }));
+                    go("ideas");
+                  }}
                   notify={notify}
                 />
               </motion.div>
@@ -222,6 +300,7 @@ export default function Dashboard({
           </AnimatePresence>
         </div>
       </main>
+      <AccountDialog open={accountOpen} onClose={() => setAccountOpen(false)} notify={notify} />
     </div>
   );
 }
@@ -269,6 +348,7 @@ function Overview({
   setStageFilter,
   onOpen,
   onApprovals,
+  onOpenDrafts,
   notify,
 }: {
   projects: Project[];
@@ -282,8 +362,11 @@ function Overview({
   setStageFilter: (s: StageKey | "ALL") => void;
   onOpen: (code: string) => void;
   onApprovals: () => void;
+  onOpenDrafts: () => void;
   notify: Notify;
 }) {
+  const me = useStaff();
+  const [registering, setRegistering] = useState(false);
   const active = projects.filter((p) => p.stage !== "DELIVERED");
   const stale = projects.filter(isStale);
   const avgGap = useMemo(() => {
@@ -304,20 +387,31 @@ function Overview({
     <div>
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <p className="text-sm text-muted">{greeting}, Dev Team 👋</p>
+          <p className="text-sm text-muted">
+            {greeting}, {me.name.split(" ")[0]} 👋
+          </p>
           <h1 className="mt-1 font-display text-3xl font-bold">Projects</h1>
         </div>
+        <div className="flex flex-wrap gap-2 self-start sm:self-auto">
+        {me.role === "admin" && (
+          <button onClick={() => setRegistering(true)} className="flex items-center gap-2 rounded-full bg-brand px-4 py-2 text-sm font-bold text-white shadow-lg shadow-brand/20 hover:bg-brand-600">
+            <UserPlus className="size-4" /> Start walk-in application
+          </button>
+        )}
         <button
           onClick={() => {
             resetStore();
+            clearFiles().catch(() => {});
             resetIdeas();
             notify("Demo data reset to the original mock projects.", "info");
           }}
-          className="flex items-center gap-2 self-start rounded-full border border-line bg-white px-4 py-2 text-sm font-bold text-muted transition hover:text-navy sm:self-auto"
+          className="flex items-center gap-2 rounded-full border border-line bg-white px-4 py-2 text-sm font-bold text-muted transition hover:text-navy"
         >
           <RotateCcw className="size-4" /> Reset demo data
         </button>
+        </div>
       </div>
+      <RegisterProjectDrawer open={registering} onClose={() => setRegistering(false)} onOpenIdeas={onOpenDrafts} notify={notify} />
 
       {/* stats */}
       <div className="mt-6 grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
@@ -326,7 +420,7 @@ function Overview({
           i={1}
           label="Awaiting approval"
           value={String(pendingCount)}
-          hint={role === "lead" ? "Updates to review" : "Sent to your lead"}
+          hint={canLead(role) ? "Updates to review" : "Sent to your lead"}
           icon={<Inbox className="size-5" />}
           onClick={pendingCount ? onApprovals : undefined}
           tone={pendingCount ? "brand" : undefined}
@@ -538,6 +632,7 @@ function ProjectList({ projects, onOpen }: { projects: Project[]; onOpen: (code:
 }
 
 function Board({ projects, role, onOpen, notify }: { projects: Project[]; role: StaffRole; onOpen: (code: string) => void; notify: Notify }) {
+  const me = useStaff();
   const [dragging, setDragging] = useState<string | null>(null);
   const [over, setOver] = useState<StageKey | null>(null);
 
@@ -546,15 +641,15 @@ function Board({ projects, role, onOpen, notify }: { projects: Project[]; role: 
     setDragging(null);
     setOver(null);
     if (!p || p.stage === stage) return;
-    if (role !== "lead") {
-      notify("Only the project lead or admin can change a stage.", "info");
+    if (!canLeadProject(me, p)) {
+      notify("Only this project's lead or an admin can change its stage.", "info");
       return;
     }
     if (stage === "ON_HOLD") {
       notify("Open the project to put it on hold. A reason is required.", "info");
       return;
     }
-    const author = actingAs(role);
+    const author = actingAs(me);
     updateProject(p.code, (proj) =>
       withActivity(
         {
@@ -564,7 +659,7 @@ function Board({ projects, role, onOpen, notify }: { projects: Project[]; role: 
           deliveredDate: stage === "DELIVERED" ? new Date().toISOString() : undefined,
           progress: Math.max(proj.progress, STAGE_MIN_PROGRESS[stage] ?? 0),
           updates: [
-            { id: Math.random().toString(36).slice(2), date: new Date().toISOString(), kind: "stage", author, title: `Stage changed to ${STAGES[stage].label}`, body: STAGES[stage].meaning },
+            { id: Math.random().toString(36).slice(2), date: new Date().toISOString(), kind: "stage", author, title: `Stage changed to ${STAGES[stage].label}`, body: stageMeaning(stage) },
             ...proj.updates,
           ],
         },
@@ -578,7 +673,7 @@ function Board({ projects, role, onOpen, notify }: { projects: Project[]; role: 
 
   return (
     <LayoutGroup>
-      <p className="mb-3 text-xs text-muted">{role === "lead" ? "Drag a card to another column to change its stage." : "Only project leads can drag cards between stages."}</p>
+      <p className="mb-3 text-xs text-muted">{canLead(role) ? "Drag a card to another column to change its stage." : "Only project leads can drag cards between stages."}</p>
       <div className="no-scrollbar -mx-4 flex gap-3 overflow-x-auto px-4 pb-4 sm:-mx-6 sm:px-6">
         {BOARD.map((stage) => {
           const items = projects.filter((p) => p.stage === stage);
@@ -641,13 +736,14 @@ function Board({ projects, role, onOpen, notify }: { projects: Project[]; role: 
 }
 
 function Approvals({ projects, role, onOpen, notify }: { projects: Project[]; role: StaffRole; onOpen: (code: string) => void; notify: Notify }) {
+  const me = useStaff();
   const items = projects.flatMap((p) => p.updates.filter((u) => u.pending).map((u) => ({ project: p, update: u })));
 
   return (
     <div>
       <h1 className="font-display text-3xl font-bold">Approvals</h1>
       <p className="mt-1 text-muted">
-        {role === "lead" ? "Client-visible updates from engineers wait here until you approve them." : "Updates you've sent for lead approval."}
+        {canLead(role) ? "Client-visible updates from engineers wait here until you approve them." : "Updates you've sent for lead approval."}
       </p>
 
       <div className="mt-6 space-y-3">
@@ -672,11 +768,11 @@ function Approvals({ projects, role, onOpen, notify }: { projects: Project[]; ro
                     {update.author.name} · {update.author.role} · {relativeDay(update.date)}
                   </p>
                 </div>
-                {role === "lead" ? (
+                {canLeadProject(me, project) ? (
                   <div className="flex shrink-0 gap-2">
                     <button
                       onClick={() => {
-                        updateProject(project.code, (p) => withActivity({ ...p, updates: p.updates.filter((u) => u.id !== update.id) }, actingAs(role), `Rejected update "${update.title}"`));
+                        updateProject(project.code, (p) => withActivity({ ...p, updates: p.updates.filter((u) => u.id !== update.id) }, actingAs(me), `Rejected update "${update.title}"`));
                         notify("Update sent back to the engineer.", "info");
                       }}
                       className="rounded-full border border-line px-4 py-2 text-sm font-bold text-muted hover:border-danger hover:text-danger"
@@ -688,7 +784,7 @@ function Approvals({ projects, role, onOpen, notify }: { projects: Project[]; ro
                         updateProject(project.code, (p) =>
                           withActivity(
                             { ...p, updates: p.updates.map((u) => (u.id === update.id ? { ...u, pending: false, date: new Date().toISOString() } : u)) },
-                            actingAs(role),
+                            actingAs(me),
                             `Approved and published "${update.title}"`,
                           ),
                         );

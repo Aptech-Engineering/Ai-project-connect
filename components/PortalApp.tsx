@@ -8,6 +8,8 @@ import Footer from "./Footer";
 import Toaster, { type Toast } from "./Toaster";
 import SubmitIdeaModal from "./SubmitIdeaModal";
 import { useProjects } from "@/lib/store";
+import { useSiteContent } from "@/lib/content";
+import { CoursesSection, FliersSection } from "./HomeSections";
 
 export type Notify = (message: string, tone?: Toast["tone"]) => void;
 
@@ -15,11 +17,12 @@ export default function PortalApp() {
   const [projectCode, setProjectCode] = useState<string | null>(null);
   const [session, setSession] = useState(0);
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const [idea, setIdea] = useState<{ open: boolean; email?: string }>({ open: false });
+  const [idea, setIdea] = useState<{ open: boolean; email?: string; resume?: string }>({ open: false });
   const openIdea = useCallback((email?: string) => setIdea({ open: true, email }), []);
   const closeIdea = useCallback(() => setIdea((s) => ({ ...s, open: false })), []);
   const statusRef = useRef<HTMLDivElement>(null);
   const projects = useProjects();
+  const { brand } = useSiteContent();
   const project = projectCode ? projects.find((p) => p.code === projectCode) : undefined;
 
   const notify = useCallback<Notify>((message, tone = "success") => {
@@ -43,6 +46,21 @@ export default function PortalApp() {
     }
   }, [projectCode, project, notify]);
 
+  // "Continue your application" links from email: /?resume=<token>
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    const resume = url.searchParams.get("resume");
+    if (!resume) return;
+    setIdea({ open: true, resume });
+    // Don't leave the private token in the address bar or history.
+    url.searchParams.delete("resume");
+    window.history.replaceState(null, "", url.pathname + url.search + url.hash);
+  }, []);
+
+  useEffect(() => {
+    if (brand.pageTitle) document.title = brand.pageTitle;
+  }, [brand.pageTitle]);
+
   const signOut = useCallback(() => {
     setProjectCode(null);
     setSession((s) => s + 1);
@@ -59,9 +77,11 @@ export default function PortalApp() {
             <ProjectStatus project={project} onSwitch={setProjectCode} onSignOut={signOut} notify={notify} />
           </div>
         )}
+        <FliersSection onSubmitIdea={() => openIdea()} />
+        <CoursesSection notify={notify} />
       </main>
       <Footer notify={notify} onSubmitIdea={openIdea} />
-      <SubmitIdeaModal open={idea.open} initialEmail={idea.email} onClose={closeIdea} />
+      <SubmitIdeaModal open={idea.open} initialEmail={idea.email} resumeToken={idea.resume} onClose={closeIdea} />
       <Toaster toasts={toasts} onDismiss={(id) => setToasts((t) => t.filter((x) => x.id !== id))} />
     </>
   );

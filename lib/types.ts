@@ -38,7 +38,17 @@ export interface Course {
   duration: string;
   format: string;
   nextStart: string;
-  fee: string;
+  /** Full price in the course currency, e.g. 185000. */
+  price: number;
+  currency: string;
+  description?: string;
+  discountPercent?: number;
+  discountCode?: string;
+  /** Promotional flier image stored in the browser (IndexedDB). */
+  flierId?: string;
+  /** External enrolment / payment page. */
+  enrolUrl?: string;
+  published: boolean;
 }
 
 export interface Technology {
@@ -48,6 +58,7 @@ export interface Technology {
   plain: string;
   mark: string;
   color: string;
+  /** Linked course id, or "" when no course is linked. */
   courseId: string;
 }
 
@@ -82,6 +93,61 @@ export interface SharedFile {
   size: string;
   date: string;
   uploadedBy?: string;
+  /** Real uploaded file stored in the browser (IndexedDB). */
+  blobId?: string;
+  /** Who shared it: the team (default) or the client. */
+  source?: "team" | "client";
+  note?: string;
+}
+
+export type ChangeRequestStatus = "SUBMITTED" | "REVIEWING" | "QUOTED" | "APPROVED" | "DECLINED" | "COMPLETED";
+
+export interface ChangeRequest {
+  id: string;
+  title: string;
+  description: string;
+  requestedBy: "client" | "team";
+  requesterName: string;
+  status: ChangeRequestStatus;
+  impactCost?: number;
+  impactDays?: number;
+  currency: string;
+  responseNote?: string;
+  createdAt: string;
+  decidedAt?: string;
+}
+
+export interface HandoverItem {
+  id: string;
+  title: string;
+  doneAt?: string;
+  doneBy?: string;
+}
+
+export interface Handover {
+  requestedAt?: string;
+  signedAt?: string;
+  signedName?: string;
+  supportPlan?: string;
+  items: HandoverItem[];
+}
+
+export interface CourseEvent {
+  id: string;
+  at: string;
+  event: "view" | "click" | "request" | "enrol" | "invite";
+  courseId: string;
+  techId?: string;
+  projectCode?: string;
+}
+
+export interface ActivityEntry {
+  id: string;
+  at: string;
+  actorType: "staff" | "client" | "system";
+  actor: string;
+  action: string;
+  projectCode?: string;
 }
 
 export interface Message {
@@ -97,12 +163,16 @@ export type LeadStatus = "NEW" | "CONTACTED" | "ENROLLED" | "NOT_INTERESTED";
 export interface CourseLead {
   id: string;
   at: string;
+  /** Empty for enquiries from the public courses section. */
   projectCode: string;
   projectTitle: string;
   clientName: string;
+  contact?: string;
   techId: string;
   courseId: string;
   type: "info" | "enrol";
+  source?: "portal" | "website" | "invite";
+  invitedBy?: string;
   status: LeadStatus;
   notes?: string;
 }
@@ -131,7 +201,7 @@ export interface Project {
   tagline: string;
   category: string;
   platforms: string;
-  client: { name: string; short: string; emailMasked: string; phoneMasked: string };
+  client: { name: string; short: string; emailMasked: string; phoneMasked: string; email?: string; phone?: string; organisation?: string };
   lead: Person;
   team: Person[];
   stage: StageKey;
@@ -150,6 +220,10 @@ export interface Project {
   messages?: Message[];
   rating?: { stars: number; text?: string; at: string };
   promosOptOut?: boolean;
+  /** Weekly progress email (NT-04). */
+  digestOptOut?: boolean;
+  changeRequests?: ChangeRequest[];
+  handover?: Handover;
   /** Old Project IDs that were regenerated and no longer grant access. */
   revokedCodes?: string[];
 }
