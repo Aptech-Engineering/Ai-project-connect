@@ -105,6 +105,29 @@ final class Seeder
         ], null);
     }
 
+    /**
+     * The weekly business summary (Overview, emailed Mondays 07:00) that every admin gets by default (spec 10.3).
+     * Only for admins who have no schedule yet, so re-running setup never duplicates it.
+     * @return int schedules created
+     */
+    public static function seedAnalyticsDefaults(): int
+    {
+        $created = 0;
+        foreach (Database::all("SELECT u.id, u.email FROM users u WHERE u.role = 'admin' AND u.status = 'active' AND NOT EXISTS (SELECT 1 FROM analytics_schedules s WHERE s.user_id = u.id)") as $admin) {
+            Database::insert('analytics_schedules', [
+                'user_id' => (int) $admin['id'],
+                'name' => 'Weekly business summary',
+                'view' => 'overview',
+                'query' => json_encode(['range' => 'last_7_days']),
+                'frequency' => 'weekly',
+                'recipients' => json_encode([$admin['email']]),
+                'format' => 'pdf',
+            ]);
+            $created++;
+        }
+        return $created;
+    }
+
     /** Demo staff, clients, projects, ideas and leads (same stories as the frontend mock). */
     public static function seedDemo(string $staffPassword): void
     {

@@ -11,6 +11,7 @@ import { readCourses, readTechnologies } from "./catalog";
 import { stageMeaning } from "./content";
 import { formatDate } from "./format";
 import type { Course, Project, Technology, Tone } from "./types";
+import { track } from "./track";
 
 type RGB = [number, number, number];
 
@@ -345,4 +346,5 @@ export async function downloadProjectReport(project: Project) {
 
   footers(doc);
   doc.save(`${project.code}-status-report.pdf`);
+  track("download", null, { kind: "report" });
 }

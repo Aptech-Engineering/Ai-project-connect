@@ -33,6 +33,21 @@ final class RateLimiter
         }
     }
 
+    /** Counts $n hits at once (e.g. one per tracked event); refuses the whole batch if it would exceed $max. */
+    public static function hitMany(string $bucket, int $n, int $max, int $windowSeconds): void
+    {
+        $row = Database::one(
+            'SELECT COUNT(*) AS hits, MIN(created_at) AS oldest FROM rate_limits WHERE bucket = ? AND created_at > (NOW() - INTERVAL ? SECOND)',
+            [self::key($bucket), $windowSeconds],
+        );
+        if ((int) $row['hits'] + $n > $max) {
+            $retry = $row['oldest'] ? max(1, $windowSeconds - (time() - strtotime((string) $row['oldest']))) : $windowSeconds;
+            throw HttpError::tooManyRequests($retry);
+        }
+        $key = self::key($bucket);
+        Database::run('INSERT INTO rate_limits (bucket) VALUES ' . implode(',', array_fill(0, $n, '(?)')), array_fill(0, $n, $key));
+    }
+
     public static function clear(string $bucket): void
     {
         Database::run('DELETE FROM rate_limits WHERE bucket = ?', [self::key($bucket)]);

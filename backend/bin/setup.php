@@ -11,6 +11,7 @@ declare(strict_types=1);
  *   --fresh            Drop and recreate all tables (DELETES ALL DATA)
  *   --demo             Also load demo projects, staff, ideas and leads
  *   --demo-password=…  Password for demo staff accounts (default: random, printed)
+ *   --demo-analytics   With --demo: ~90 days of synthetic website traffic for the Analytics dashboard, then the rollup
  *
  * No SSH on your host? Import database/schema.sql in phpMyAdmin instead, then run this script
  * once from cPanel → Terminal or a one-off cron job.
@@ -26,7 +27,7 @@ require dirname(__DIR__) . '/src/bootstrap.php';
 use App\Core\Database;
 use App\Setup\Seeder;
 
-$opts = getopt('', ['fresh', 'demo', 'admin-name:', 'admin-email:', 'admin-password:', 'demo-password:']);
+$opts = getopt('', ['fresh', 'demo', 'demo-analytics', 'admin-name:', 'admin-email:', 'admin-password:', 'demo-password:']);
 
 $tablesExist = (bool) Database::value("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'projects'");
 if (isset($opts['fresh']) || !$tablesExist) {
@@ -62,6 +63,27 @@ if (isset($opts['demo'])) {
         Seeder::seedDemo($demoPassword);
         echo "Demo data loaded. Demo staff (e.g. tunde@aptech.test) password: {$demoPassword}\n";
         echo "Demo draft application: /apply?resume=" . Seeder::DEMO_DRAFT_TOKEN . "\n";
+    }
+}
+
+// Analytics: stage history for projects that have none, and the default weekly summary for admins.
+$history = App\Analytics\StageHistory::backfill();
+if ($history > 0) {
+    echo "Project stage history back-filled ({$history} rows).\n";
+}
+$schedules = Seeder::seedAnalyticsDefaults();
+if ($schedules > 0) {
+    echo "Weekly analytics summary scheduled for {$schedules} admin(s).\n";
+}
+
+if (isset($opts['demo-analytics'])) {
+    if ((int) Database::value('SELECT COUNT(*) FROM analytics_sessions') > 0) {
+        echo "Demo analytics skipped: tracking data already exists (use --fresh to start over).\n";
+    } else {
+        echo "Generating ~90 days of demo website traffic…\n";
+        $made = App\Analytics\DemoTraffic::seed(90);
+        $rolled = App\Analytics\Rollup::rollDays(date('Y-m-d', strtotime('-89 days')), date('Y-m-d', strtotime('-1 day')));
+        echo "Demo analytics loaded: {$made['sessions']} sessions, {$made['events']} events, {$made['requests']} API log rows; {$rolled} rollup rows.\n";
     }
 }
 

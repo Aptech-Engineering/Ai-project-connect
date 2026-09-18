@@ -66,10 +66,19 @@ final class Auth
             return null;
         }
         if (self::$staffCache === null || (int) self::$staffCache['id'] !== (int) $id) {
-            self::$staffCache = Database::one(
-                "SELECT id, name, email, phone, role, job_title, status FROM users WHERE id = ? AND status = 'active'",
-                [(int) $id],
-            );
+            try {
+                self::$staffCache = Database::one(
+                    "SELECT id, name, email, phone, role, job_title, status, must_change_password, last_login_at, can_view_analytics FROM users WHERE id = ? AND status = 'active'",
+                    [(int) $id],
+                );
+            } catch (\PDOException $e) {
+                // Database without the analytics migration (users.can_view_analytics): keep the panel working.
+                error_log('[auth] ' . $e->getMessage());
+                self::$staffCache = Database::one(
+                    "SELECT id, name, email, phone, role, job_title, status, must_change_password, last_login_at FROM users WHERE id = ? AND status = 'active'",
+                    [(int) $id],
+                );
+            }
             if (self::$staffCache === null) {
                 unset($_SESSION['staff_id']);
             }

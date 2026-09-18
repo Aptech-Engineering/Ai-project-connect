@@ -40,6 +40,7 @@ import Logo from "./Logo";
 import WalletLedger from "./wallet/WalletLedger";
 import WalletStep, { type PaystackReturn } from "./wallet/WalletStep";
 import { errorMessage } from "@/lib/api";
+import { track } from "@/lib/track";
 import { useSiteContent } from "@/lib/content";
 import { formatBytes, validatePdf } from "@/lib/files";
 import { cn, relativeDay } from "@/lib/format";
@@ -65,6 +66,8 @@ import {
 
 const STEPS = ["About you", "Your idea", "Budget & timeline", "Commitment fee"];
 const WALLET_STEP = 3;
+/** Analytics names for each step, in order (spec 7.3). */
+const STEP_EVENTS = ["about_you", "idea", "budget", "payment"] as const;
 
 /** `draftMissing` names the sections; these are the steps that hold them. */
 const SECTION_STEP: Record<string, number> = { "About you": 0, "Your idea": 1, "Budget & timeline": 2 };
@@ -243,6 +246,11 @@ export function IdeaWizard({
     else setView("form");
   }, [mounted, resumeToken, remembered.loading, remembered.token, remembered.application, paystackReturn]);
 
+  // Counted once each time the form is opened, as a modal or as the /apply page.
+  useEffect(() => {
+    track("idea_form", "opened", { step: "opened", variant });
+  }, [variant]);
+
   // The server's copy is the truth: fill the form from it the first time it arrives.
   useEffect(() => {
     if (!token || !application || loadedFor === token) return;
@@ -276,6 +284,7 @@ export function IdeaWizard({
   };
 
   const goTo = (next: number) => {
+    if (next > step) track("idea_form", STEP_EVENTS[next] ?? null, { step: STEP_EVENTS[next], variant });
     setDir(next > step ? 1 : -1);
     setStep(next);
     rootRef.current?.querySelector(".modal-scroll")?.scrollTo({ top: 0 });
@@ -289,6 +298,7 @@ export function IdeaWizard({
       await saveDraft(token, fields, file);
     } else {
       const created = await createDraft(fields, file?.attachment);
+      track("idea_form", "draft_saved", { step: "draft_saved", variant });
       setToken(created.token);
       setLoadedFor(created.token);
       setDevLink(created.devLink ?? null);
@@ -333,6 +343,7 @@ export function IdeaWizard({
     try {
       await saveDraft(token, fieldsFrom(form));
       const result = await submitDraft(token);
+      track("idea_form", "submitted", { step: "submitted", variant });
       setSent({ ref: result.ref, title: result.title });
       setView("done");
     } catch (e) {
@@ -828,6 +839,7 @@ export function IdeaWizard({
             )}
             {(step > 0 || token) && (
               <button
+                data-track="apply_save_later"
                 onClick={saveForLater}
                 disabled={!!busy}
                 className="hidden items-center gap-1.5 rounded-full px-3 py-2.5 text-sm font-bold text-muted transition hover:text-navy disabled:opacity-50 sm:flex"
@@ -883,7 +895,10 @@ export default function ApplyPage() {
   useEffect(() => {
     const resume = new URLSearchParams(window.location.search).get("resume");
     const paystack = paystackResult();
-    if (paystack) clearPaystackResult();
+    if (paystack) {
+      clearPaystackResult();
+      track("payment", paystack.outcome === "failed" ? "returned_failed" : "returned_success", { method: "paystack", step: paystack.outcome === "failed" ? "returned_failed" : "returned_success" });
+    }
     if (resume) {
       const url = new URL(window.location.href);
       url.searchParams.delete("resume");
@@ -1069,6 +1084,7 @@ function ContinueLater({ openByDefault }: { openByDefault?: boolean }) {
     setError("");
     try {
       setSent(await emailResumeLinks(email));
+      track("idea_form", "resume_link_requested", { step: "resume_link_requested" });
     } catch (err) {
       setError(errorMessage(err));
     } finally {

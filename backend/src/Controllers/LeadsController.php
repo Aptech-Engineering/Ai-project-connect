@@ -53,7 +53,7 @@ final class LeadsController
     public static function update(Request $r): void
     {
         $user = Auth::requireStaff(['admin', 'counsellor']);
-        $lead = Database::one('SELECT id FROM leads WHERE id = ?', [(int) $r->params['id']]);
+        $lead = Database::one('SELECT * FROM leads WHERE id = ?', [(int) $r->params['id']]);
         if ($lead === null) {
             throw HttpError::notFound('Lead not found.');
         }
@@ -65,11 +65,22 @@ final class LeadsController
         if (!empty($data['status'])) {
             $changes['status'] = $data['status'];
             $changes['counsellor_id'] = (int) $user['id'];
+            // For analytics: when the lead was first contacted (first move away from NEW) and when it enrolled.
+            // (only once the analytics migration has added these columns)
+            if (array_key_exists('contacted_at', $lead) && $data['status'] !== 'NEW' && $lead['contacted_at'] === null) {
+                $changes['contacted_at'] = date('Y-m-d H:i:s');
+            }
+            if (array_key_exists('enrolled_at', $lead) && $data['status'] === 'ENROLLED' && $lead['enrolled_at'] === null) {
+                $changes['enrolled_at'] = date('Y-m-d H:i:s');
+            }
         }
         if (array_key_exists('notes', $data)) {
             $changes['notes'] = $data['notes'];
         }
         Database::update('leads', $changes, ['id' => (int) $lead['id']]);
+        if (isset($changes['status']) && $changes['status'] !== $lead['status']) {
+            \App\Core\Activity::staff($user, "Marked course lead #{$lead['id']} ({$lead['client_name']}) as {$changes['status']}");
+        }
         Response::json(Presenter::lead(Database::one(self::SELECT . ' WHERE l.id = ?', [(int) $lead['id']])));
     }
 }

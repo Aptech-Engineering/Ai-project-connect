@@ -5,6 +5,7 @@
  * and downloads come from the API, so nothing is kept in the browser.
  */
 import { apiUrl } from "./api";
+import { track } from "./track";
 
 export const MAX_PDF_BYTES = 10 * 1024 * 1024;
 export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
@@ -69,6 +70,7 @@ export const publicImageUrl = (id?: string | null) => (id ? apiUrl(`/files/${id}
 export async function openRemoteFile(path: string, name: string, mode: "view" | "download" = "view"): Promise<boolean> {
   try {
     const src = fileUrl(path);
+    if (mode === "download") track("download", null, { kind: /proposal/.test(path) ? "proposal" : "file" });
     const res = await fetch(src + (mode === "download" ? (src.includes("?") ? "&" : "?") + "download=1" : ""), { credentials: "include" });
     if (!res.ok) return false;
     const blob = await res.blob();

@@ -3,6 +3,9 @@
 declare(strict_types=1);
 
 use App\Controllers\AdminController as Admin;
+use App\Controllers\AnalyticsController as Analytics;
+use App\Controllers\AnalyticsViewsController as AnalyticsViews;
+use App\Controllers\TrackController as Track;
 use App\Controllers\ApplicationsController as Apply;
 use App\Controllers\PaymentsController as Payments;
 use App\Controllers\SettingsController as SettingsCtrl;
@@ -128,6 +131,25 @@ return static function (Router $r): void {
 
     $r->get('/api/staff/leads', [Leads::class, 'index']);
     $r->patch('/api/staff/leads/{id}', [Leads::class, 'update']);
+
+    /* ---------- analytics (spec section 9) ---------- */
+    $r->post('/api/track', [Track::class, 'ingest']);
+    $r->get('/api/analytics/me', [Analytics::class, 'me']);
+    foreach (['overview', 'traffic', 'engagement', 'revenue', 'projects', 'pipeline', 'clients', 'courses', 'team', 'operations', 'realtime'] as $screen) {
+        $r->get('/api/analytics/' . $screen, [Analytics::class, 'screen']);
+    }
+    $r->get('/api/analytics/traffic/timeseries', [Analytics::class, 'trafficTimeseries']);
+    $r->get('/api/analytics/traffic/breakdown', [Analytics::class, 'trafficBreakdown']);
+    $r->get('/api/analytics/funnels/{id}', [Analytics::class, 'screen']);
+    $r->get('/api/analytics/export', [Analytics::class, 'export']);
+    $r->get('/api/analytics/views', [AnalyticsViews::class, 'views']);
+    $r->post('/api/analytics/views', [AnalyticsViews::class, 'createView']);
+    $r->patch('/api/analytics/views/{id}', [AnalyticsViews::class, 'updateView']);
+    $r->delete('/api/analytics/views/{id}', [AnalyticsViews::class, 'deleteView']);
+    $r->get('/api/analytics/schedules', [AnalyticsViews::class, 'schedules']);
+    $r->post('/api/analytics/schedules', [AnalyticsViews::class, 'createSchedule']);
+    $r->patch('/api/analytics/schedules/{id}', [AnalyticsViews::class, 'updateSchedule']);
+    $r->delete('/api/analytics/schedules/{id}', [AnalyticsViews::class, 'deleteSchedule']);
 
     /* ---------- admin ---------- */
     $r->get('/api/admin/reports', [Reports::class, 'reports']);

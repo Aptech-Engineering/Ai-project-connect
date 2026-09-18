@@ -69,6 +69,8 @@ final class Presenter
             'jobTitle' => $u['job_title'] ?? null,
             'status' => $u['status'] ?? 'active',
             'mustChangePassword' => (bool) ($u['must_change_password'] ?? false),
+            // Admins always have analytics access; for everyone else it's the admin-set flag.
+            'canViewAnalytics' => ($u['role'] ?? '') === 'admin' || (bool) ($u['can_view_analytics'] ?? false),
             'lastLoginAt' => self::iso($u['last_login_at'] ?? null),
         ];
     }

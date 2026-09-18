@@ -35,6 +35,7 @@ use App\Core\Response;
 use App\Core\Router;
 
 $request = Request::fromGlobals();
+$startedAt = hrtime(true);
 
 header('X-Content-Type-Options: nosniff');
 header('X-Frame-Options: DENY');
@@ -60,8 +61,11 @@ try {
 
     // CSRF: state-changing requests must come from our own frontend.
     // The Paystack webhook is server-to-server and is authenticated by its HMAC signature instead.
+    // The tracker (POST /api/track) is a "simple" cross-site request (sendBeacon can't set headers):
+    // it runs its own Origin/Referer allow-list check instead, see TrackController.
     $isWebhook = $request->method === 'POST' && $request->path === '/api/payments/paystack/webhook';
-    if (!$isWebhook && !in_array($request->method, ['GET', 'HEAD', 'OPTIONS'], true)) {
+    $isTracker = $request->method === 'POST' && $request->path === '/api/track';
+    if (!$isWebhook && !$isTracker && !in_array($request->method, ['GET', 'HEAD', 'OPTIONS'], true)) {
         if ($request->header('X-Requested-With') !== 'XMLHttpRequest') {
             throw HttpError::forbidden('Missing X-Requested-With header.');
         }
@@ -93,3 +97,6 @@ try {
     }
     Response::json($body, 500);
 }
+
+// Operations screen: one row per API request (route pattern, status, time). Never breaks a response.
+App\Analytics\RequestLog::record($request, $startedAt);

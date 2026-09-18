@@ -138,6 +138,7 @@ final class StaffController
         if ($lead) {
             Database::insert('project_members', ['project_id' => $projectId, 'user_id' => (int) $lead['id']]);
         }
+        \App\Analytics\StageHistory::record($projectId, null, 'APPROVED', $actor ? (int) $actor['id'] : null, $now);
         Database::insert('updates', [
             'project_id' => $projectId,
             'author_id' => $lead ? (int) $lead['id'] : ($actor ? (int) $actor['id'] : null),

@@ -5,7 +5,8 @@
 SET NAMES utf8mb4;
 SET FOREIGN_KEY_CHECKS = 0;
 
-DROP TABLE IF EXISTS settings, idea_payments, idea_resume_tokens, handover_items, change_requests, course_events, password_resets, quotes,
+DROP TABLE IF EXISTS analytics_schedules, analytics_saved_views, api_request_log, project_stage_history,
+  analytics_daily, analytics_visitors, analytics_sessions, analytics_events, settings, idea_payments, idea_resume_tokens, handover_items, change_requests, course_events, password_resets, quotes,
   rate_limits, otp_codes, site_content, activity_log, notifications, leads,
   ideas, messages, project_files, files, courses, project_technologies, technologies, milestones,
   updates, project_members, project_revoked_codes, projects, clients, users;
@@ -24,6 +25,8 @@ CREATE TABLE users (
   status        ENUM('active','disabled') NOT NULL DEFAULT 'active',
   -- Set when an admin creates the account or resets the password
   must_change_password TINYINT(1) NOT NULL DEFAULT 0,
+  -- Analytics dashboard access for non-admins (admins always have it)
+  can_view_analytics TINYINT(1) NOT NULL DEFAULT 0,
   last_login_at DATETIME NULL,
   created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -336,6 +339,8 @@ CREATE TABLE leads (
   status         ENUM('NEW','CONTACTED','ENROLLED','NOT_INTERESTED') NOT NULL DEFAULT 'NEW',
   notes          TEXT NULL,
   counsellor_id  INT UNSIGNED NULL,
+  contacted_at   DATETIME NULL,
+  enrolled_at    DATETIME NULL,
   created_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   KEY idx_leads_status (status),
@@ -353,6 +358,8 @@ CREATE TABLE notifications (
   recipient   VARCHAR(190) NOT NULL,
   subject     VARCHAR(255) NOT NULL,
   body        TEXT NOT NULL,
+  html_body   MEDIUMTEXT NULL,
+  attachments JSON NULL,
   project_id  INT UNSIGNED NULL,
   status      ENUM('queued','sent','failed','logged') NOT NULL DEFAULT 'queued',
   attempts    TINYINT UNSIGNED NOT NULL DEFAULT 0,
@@ -375,6 +382,137 @@ CREATE TABLE activity_log (
   created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   KEY idx_activity_project (project_id, created_at),
   CONSTRAINT fk_activity_project FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================== Analytics (spec section 8.2) ==============================
+
+-- One row per tracked browser event (raw, 13-month retention). Never stores IP addresses.
+CREATE TABLE analytics_events (
+  id            BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  occurred_at   DATETIME(3)  NOT NULL,
+  received_at   DATETIME(3)  NOT NULL,
+  visitor_id    CHAR(36)     NOT NULL,
+  session_id    CHAR(36)     NOT NULL,
+  event         VARCHAR(40)  NOT NULL,
+  name          VARCHAR(80)  NULL,
+  path          VARCHAR(255) NULL,
+  props         JSON         NULL,
+  source        VARCHAR(80)  NULL,
+  medium        VARCHAR(40)  NULL,
+  campaign      VARCHAR(120) NULL,
+  referrer_host VARCHAR(120) NULL,
+  device        ENUM('desktop','mobile','tablet') NULL,
+  browser       VARCHAR(40)  NULL,
+  os            VARCHAR(40)  NULL,
+  country       CHAR(2)      NULL,
+  state         VARCHAR(80)  NULL,
+  internal      TINYINT(1)   NOT NULL DEFAULT 0,
+  KEY idx_ae_occurred (occurred_at),
+  KEY idx_ae_event (event, occurred_at),
+  KEY idx_ae_session (session_id),
+  KEY idx_ae_visitor (visitor_id, occurred_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- One row per session, maintained as events arrive. client_session_id is the id the browser sent;
+-- session_id differs from it only when the server had to split a session (30 min idle or Lagos midnight).
+CREATE TABLE analytics_sessions (
+  session_id        CHAR(36)     NOT NULL PRIMARY KEY,
+  client_session_id CHAR(36)     NOT NULL,
+  visitor_id        CHAR(36)     NOT NULL,
+  started_at        DATETIME(3)  NOT NULL,
+  ended_at          DATETIME(3)  NOT NULL,
+  page_views        INT UNSIGNED NOT NULL DEFAULT 0,
+  events            INT UNSIGNED NOT NULL DEFAULT 0,
+  landing_path      VARCHAR(255) NULL,
+  exit_path         VARCHAR(255) NULL,
+  source            VARCHAR(80)  NULL,
+  medium            VARCHAR(40)  NULL,
+  campaign          VARCHAR(120) NULL,
+  referrer_host     VARCHAR(120) NULL,
+  device            ENUM('desktop','mobile','tablet') NULL,
+  browser           VARCHAR(40)  NULL,
+  os                VARCHAR(40)  NULL,
+  country           CHAR(2)      NULL,
+  state             VARCHAR(80)  NULL,
+  is_bounce         TINYINT(1)   NOT NULL DEFAULT 1,
+  internal          TINYINT(1)   NOT NULL DEFAULT 0,
+  signed_in_as      ENUM('none','client','staff') NOT NULL DEFAULT 'none',
+  KEY idx_as_started (started_at),
+  KEY idx_as_visitor (visitor_id, started_at),
+  KEY idx_as_client (client_session_id, started_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- First-seen date per visitor (new vs returning)
+CREATE TABLE analytics_visitors (
+  visitor_id CHAR(36) NOT NULL PRIMARY KEY,
+  first_seen DATETIME NOT NULL,
+  last_seen  DATETIME NOT NULL,
+  KEY idx_av_first (first_seen)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Daily rollups of event-level counts so long ranges stay fast (kept forever)
+CREATE TABLE analytics_daily (
+  day        DATE         NOT NULL,
+  metric     VARCHAR(40)  NOT NULL,
+  dimension  VARCHAR(40)  NOT NULL,
+  value_key  VARCHAR(160) NOT NULL,
+  value      BIGINT       NOT NULL,
+  PRIMARY KEY (day, metric, dimension, value_key)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Stage history, for time-in-stage (back-filled from existing stage updates)
+CREATE TABLE project_stage_history (
+  id          INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  project_id  INT UNSIGNED NOT NULL,
+  from_stage  VARCHAR(20)  NULL,
+  to_stage    VARCHAR(20)  NOT NULL,
+  changed_at  DATETIME     NOT NULL,
+  changed_by  INT UNSIGNED NULL,
+  KEY idx_psh_project (project_id, changed_at),
+  CONSTRAINT fk_psh_project FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+  CONSTRAINT fk_psh_user FOREIGN KEY (changed_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Lightweight request log for the Operations screen (30-day retention). Route pattern, never the raw path.
+CREATE TABLE api_request_log (
+  id        BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  at        DATETIME(3)  NOT NULL,
+  method    VARCHAR(8)   NOT NULL,
+  route     VARCHAR(160) NOT NULL,
+  status    SMALLINT UNSIGNED NOT NULL,
+  ms        INT UNSIGNED NOT NULL,
+  internal  TINYINT(1)   NOT NULL DEFAULT 0,
+  KEY idx_arl_at (at),
+  KEY idx_arl_route (route, at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE analytics_saved_views (
+  id          INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  user_id     INT UNSIGNED NOT NULL,
+  name        VARCHAR(120) NOT NULL,
+  query       JSON         NOT NULL,
+  shared      TINYINT(1)   NOT NULL DEFAULT 0,
+  created_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  KEY idx_asv_user (user_id),
+  CONSTRAINT fk_asv_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE analytics_schedules (
+  id            INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  user_id       INT UNSIGNED NOT NULL,
+  name          VARCHAR(120) NOT NULL,
+  view          VARCHAR(20)  NOT NULL,
+  query         JSON         NOT NULL,
+  frequency     ENUM('daily','weekly','monthly') NOT NULL DEFAULT 'weekly',
+  recipients    JSON         NOT NULL,
+  format        ENUM('pdf','csv','xlsx') NOT NULL DEFAULT 'pdf',
+  last_sent_at  DATETIME     NULL,
+  active        TINYINT(1)   NOT NULL DEFAULT 1,
+  created_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  KEY idx_asch_active (active),
+  CONSTRAINT fk_asch_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Admin settings (payment credentials, bank details, notification drivers).

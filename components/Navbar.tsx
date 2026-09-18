@@ -59,6 +59,7 @@ export default function Navbar({ client, onSignOut, onSubmitIdea }: { client?: s
             </>
           ) : (
             <button
+              data-track="nav_submit_idea"
               onClick={submitIdea}
               className="group flex items-center gap-2 rounded-full bg-brand px-5 py-2.5 text-sm font-bold text-white shadow-lg shadow-brand/25 transition hover:bg-brand-600"
             >
@@ -97,7 +98,7 @@ export default function Navbar({ client, onSignOut, onSubmitIdea }: { client?: s
                   <LogOut className="size-4" /> Sign out ({client})
                 </button>
               ) : (
-                <button onClick={submitIdea} className="mt-2 flex items-center justify-center gap-2 rounded-full bg-brand py-3 font-bold text-white">
+                <button data-track="nav_submit_idea" onClick={submitIdea} className="mt-2 flex items-center justify-center gap-2 rounded-full bg-brand py-3 font-bold text-white">
                   <Sparkles className="size-4" /> {nav.ctaLabel}
                 </button>
               )}

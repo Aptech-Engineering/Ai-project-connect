@@ -10,6 +10,7 @@
  * the person presses the button.
  */
 import { api, formData, query } from "./api";
+import { track } from "./track";
 import { formatPrice } from "./catalog";
 import { STALE_DAYS, clientUpdates } from "./data";
 import { daysFromNow } from "./format";
@@ -298,6 +299,7 @@ export async function setDigestOptOut(code: string, optOut: boolean) {
 /* ================= 5. Course funnel (LS-05) ================= */
 
 export function trackCourseClick(courseId: string, techId?: string, projectCode?: string) {
+  track("course_click", courseId, { courseId });
   return trackCourseEvent("click", courseId, techId, projectCode);
 }
 
@@ -307,6 +309,7 @@ const viewedThisSession = new Set<string>();
 export function trackCourseView(courseId: string) {
   if (viewedThisSession.has(courseId)) return Promise.resolve();
   viewedThisSession.add(courseId);
+  track("course_view", courseId, { courseId });
   return trackCourseEvent("view", courseId);
 }
 

@@ -41,7 +41,7 @@ final class Router
             $names[] = $m[1];
             return '([^/]+)';
         }, $pattern);
-        $this->routes[] = ['method' => $method, 'regex' => '#^' . $regex . '$#', 'names' => $names, 'handler' => $handler];
+        $this->routes[] = ['method' => $method, 'regex' => '#^' . $regex . '$#', 'names' => $names, 'handler' => $handler, 'pattern' => $pattern];
     }
 
     public function dispatch(Request $request): void
@@ -57,6 +57,7 @@ final class Router
             }
             array_shift($matches);
             $request->params = array_combine($route['names'], $matches) ?: [];
+            $request->route = $route['pattern'];
             ($route['handler'])($request);
             return;
         }

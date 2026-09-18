@@ -14,12 +14,16 @@ namespace App\Core;
  */
 final class Notifier
 {
-    public static function email(string $audience, string $to, string $subject, string $body, ?int $projectId = null): void
+    /**
+     * @param string|null $html optional HTML alternative of $body
+     * @param list<array{path:string, name:string, mime:string}> $attachments files on disk (e.g. scheduled analytics reports)
+     */
+    public static function email(string $audience, string $to, string $subject, string $body, ?int $projectId = null, ?string $html = null, array $attachments = []): void
     {
         if (!filter_var($to, FILTER_VALIDATE_EMAIL)) {
             return;
         }
-        self::queue($audience, 'email', $to, $subject, $body, $projectId);
+        self::queue($audience, 'email', $to, $subject, $body, $projectId, $html, $attachments);
     }
 
     public static function sms(string $audience, ?string $to, string $body, ?int $projectId = null): void
@@ -45,9 +49,9 @@ final class Notifier
         self::email('staff', $to, $subject, $body, $projectId);
     }
 
-    private static function queue(string $audience, string $channel, string $to, string $subject, string $body, ?int $projectId): void
+    private static function queue(string $audience, string $channel, string $to, string $subject, string $body, ?int $projectId, ?string $html = null, array $attachments = []): void
     {
-        $id = Database::insert('notifications', [
+        $row = [
             'audience' => $audience,
             'channel' => $channel,
             'recipient' => $to,
@@ -55,7 +59,15 @@ final class Notifier
             'body' => $body,
             'project_id' => $projectId,
             'status' => 'queued',
-        ]);
+        ];
+        // html_body / attachments only exist after the analytics migration and are only used by scheduled reports.
+        if ($html !== null) {
+            $row['html_body'] = $html;
+        }
+        if ($attachments !== []) {
+            $row['attachments'] = json_encode($attachments, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        }
+        $id = Database::insert('notifications', $row);
         if (Config::get('notifications.send_immediately', true)) {
             self::deliver($id);
         }
@@ -96,14 +108,13 @@ final class Notifier
         if ((string) Settings::get('notifications.smtpHost', '') !== '') {
             return self::sendSmtp($n, $fromEmail, $fromName);
         }
+        [$mimeHeaders, $mimeBody] = self::mime($n);
         $headers = [
             'From' => sprintf('%s <%s>', mb_encode_mimeheader($fromName), $fromEmail),
             'Reply-To' => (string) Config::get('mail.reply_to', $fromEmail),
             'MIME-Version' => '1.0',
-            'Content-Type' => 'text/plain; charset=UTF-8',
-            'Content-Transfer-Encoding' => '8bit',
-        ];
-        $ok = mail((string) $n['recipient'], mb_encode_mimeheader((string) $n['subject']), (string) $n['body'], $headers, '-f' . $fromEmail);
+        ] + $mimeHeaders;
+        $ok = mail((string) $n['recipient'], mb_encode_mimeheader((string) $n['subject']), $mimeBody, $headers, '-f' . $fromEmail);
         if (!$ok) {
             throw new \RuntimeException('mail() returned false');
         }
@@ -165,25 +176,69 @@ final class Notifier
             $say('MAIL FROM:<' . $fromEmail . '>', '250');
             $say('RCPT TO:<' . (string) $n['recipient'] . '>', '250');
             $say('DATA', '354');
-            $body = str_replace("\n.", "\n..", str_replace("\r\n", "\n", (string) $n['body']));
-            $message = implode("\r\n", [
+            [$mimeHeaders, $mimeBody] = self::mime($n);
+            $body = str_replace("\n.", "\n..", str_replace("\r\n", "\n", $mimeBody));
+            $headerLines = [];
+            foreach ($mimeHeaders as $name => $value) {
+                $headerLines[] = $name . ': ' . $value;
+            }
+            $message = implode("\r\n", array_merge([
                 'From: ' . sprintf('%s <%s>', mb_encode_mimeheader($fromName), $fromEmail),
                 'To: <' . (string) $n['recipient'] . '>',
                 'Subject: ' . mb_encode_mimeheader((string) $n['subject']),
                 'Date: ' . date('r'),
                 'MIME-Version: 1.0',
-                'Content-Type: text/plain; charset=UTF-8',
-                'Content-Transfer-Encoding: 8bit',
+            ], $headerLines, [
                 '',
                 str_replace("\n", "\r\n", $body),
                 '.',
-            ]);
+            ]));
             $say($message, '250');
             $say('QUIT', '221');
         } finally {
             fclose($socket);
         }
         return 'sent';
+    }
+
+    /**
+     * Content headers + body: plain text, or multipart when there is an HTML part or attachments.
+     * @return array{0: array<string, string>, 1: string}
+     */
+    private static function mime(array $n): array
+    {
+        $text = (string) $n['body'];
+        $html = $n['html_body'] ?? null;
+        $files = !empty($n['attachments']) ? (json_decode((string) $n['attachments'], true) ?: []) : [];
+        if ($html === null && $files === []) {
+            return [['Content-Type' => 'text/plain; charset=UTF-8', 'Content-Transfer-Encoding' => '8bit'], $text];
+        }
+        $boundary = 'apc-' . bin2hex(random_bytes(12));
+        $alt = 'apc-alt-' . bin2hex(random_bytes(12));
+        $parts = [];
+        $textPart = "Content-Type: text/plain; charset=UTF-8\nContent-Transfer-Encoding: base64\n\n" . chunk_split(base64_encode($text), 76, "\n");
+        if ($html !== null) {
+            $parts[] = "Content-Type: multipart/alternative; boundary=\"{$alt}\"\n\n--{$alt}\n" . $textPart
+                . "--{$alt}\nContent-Type: text/html; charset=UTF-8\nContent-Transfer-Encoding: base64\n\n" . chunk_split(base64_encode((string) $html), 76, "\n")
+                . "--{$alt}--\n";
+        } else {
+            $parts[] = $textPart;
+        }
+        foreach ($files as $f) {
+            $path = (string) ($f['path'] ?? '');
+            if (!is_file($path)) {
+                throw new \RuntimeException('Attachment is missing: ' . basename($path));
+            }
+            $name = preg_replace('/[^A-Za-z0-9._ -]/', '_', (string) ($f['name'] ?? basename($path)));
+            $parts[] = 'Content-Type: ' . ($f['mime'] ?? 'application/octet-stream') . "; name=\"{$name}\"\nContent-Transfer-Encoding: base64\nContent-Disposition: attachment; filename=\"{$name}\"\n\n"
+                . chunk_split(base64_encode((string) file_get_contents($path)), 76, "\n");
+        }
+        $body = '';
+        foreach ($parts as $part) {
+            $body .= "--{$boundary}\n" . $part;
+        }
+        $body .= "--{$boundary}--\n";
+        return [['Content-Type' => "multipart/mixed; boundary=\"{$boundary}\""], $body];
     }
 
     private static function sendSms(array $n): string

@@ -21,16 +21,20 @@ export function SiteLink({
   className,
   children,
   onClick,
+  track,
 }: {
   href: string;
   onSubmitIdea: () => void;
   className?: string;
   children: React.ReactNode;
   onClick?: () => void;
+  /** Analytics CTA id (spec 7.4). */
+  track?: string;
 }) {
   const external = /^https?:\/\//.test(href);
   return (
     <a
+      data-track={track}
       href={href === SUBMIT_IDEA_HREF ? "#" : href}
       target={external ? "_blank" : undefined}
       rel={external ? "noreferrer" : undefined}
@@ -65,7 +69,7 @@ export function AnnouncementBar({ onSubmitIdea }: { onSubmitIdea: () => void }) 
             <Megaphone className="hidden size-4 shrink-0 sm:block" />
             <span>{announcement.text}</span>
             {announcement.linkLabel && announcement.linkHref && (
-              <SiteLink href={announcement.linkHref} onSubmitIdea={onSubmitIdea} className="shrink-0 font-bold underline underline-offset-2">
+              <SiteLink href={announcement.linkHref} onSubmitIdea={onSubmitIdea} track="announcement_link" className="shrink-0 font-bold underline underline-offset-2">
                 {announcement.linkLabel}
               </SiteLink>
             )}
@@ -111,6 +115,7 @@ export function FliersSection({ onSubmitIdea }: { onSubmitIdea: () => void }) {
                   <SiteLink
                     href={f.ctaHref}
                     onSubmitIdea={onSubmitIdea}
+                    track="flier_cta"
                     className="mt-4 inline-flex w-fit items-center gap-1.5 rounded-full bg-brand px-4 py-2 text-sm font-bold text-white transition hover:bg-brand-600"
                   >
                     {f.ctaLabel} <ArrowRight className="size-4" />
@@ -209,11 +214,12 @@ export function CoursesSection({ notify }: { notify: Notify }) {
                   </div>
                 </div>
                 <div className="mt-4 grid grid-cols-2 gap-2">
-                  <button onClick={() => setEnquire({ course: c, type: "info" })} className="rounded-xl border border-line py-2.5 text-sm font-bold transition hover:border-navy">
+                  <button data-track="course_info" onClick={() => setEnquire({ course: c, type: "info" })} className="rounded-xl border border-line py-2.5 text-sm font-bold transition hover:border-navy">
                     {copy.enquiryButton}
                   </button>
                   {c.enrolUrl ? (
                     <a
+                      data-track="course_enrol"
                       href={c.enrolUrl}
                       target="_blank"
                       rel="noreferrer"
@@ -222,7 +228,7 @@ export function CoursesSection({ notify }: { notify: Notify }) {
                       {copy.enrolButton} <ExternalLink className="size-3.5" />
                     </a>
                   ) : (
-                    <button onClick={() => setEnquire({ course: c, type: "enrol" })} className="rounded-xl bg-brand py-2.5 text-sm font-bold text-white transition hover:bg-brand-600">
+                    <button data-track="course_enrol" onClick={() => setEnquire({ course: c, type: "enrol" })} className="rounded-xl bg-brand py-2.5 text-sm font-bold text-white transition hover:bg-brand-600">
                       {copy.enrolButton}
                     </button>
                   )}

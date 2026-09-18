@@ -107,6 +107,7 @@ final class Projects
     {
         $now = date('Y-m-d H:i:s');
         Database::update('projects', ['stage' => 'DELIVERED', 'progress' => 100, 'hold_reason' => null, 'paused_at_step' => null, 'delivered_at' => $project['delivered_at'] ?? $now], ['id' => (int) $project['id']]);
+        \App\Analytics\StageHistory::record((int) $project['id'], (string) $project['stage'], 'DELIVERED', null, $now);
         $lead = self::lead($project);
         Database::insert('updates', [
             'project_id' => (int) $project['id'],
@@ -166,6 +167,7 @@ final class Projects
             Database::update('projects', $data, ['id' => (int) $project['id']]);
 
             if ($stageChanged) {
+                \App\Analytics\StageHistory::record((int) $project['id'], (string) $project['stage'], $stage, (int) $user['id']);
                 $title = $stage === 'ON_HOLD' ? 'Project paused' : 'Stage changed to ' . Stages::label($stage);
                 $body = $stage === 'ON_HOLD' ? trim((string) $holdReason) : Stages::meaning($stage);
                 Database::insert('updates', [

@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { AlertTriangle, Building2, Check, CheckCircle2, Clock, Copy, CreditCard, FileText, Landmark, Loader2, Lock, RefreshCw, ShieldCheck, UploadCloud, Wallet, X } from "lucide-react";
 import { ApiError, errorMessage } from "@/lib/api";
+import { track } from "@/lib/track";
 import { formatPrice } from "@/lib/catalog";
 import { formatBytes, validateProof } from "@/lib/files";
 import { cn } from "@/lib/format";
@@ -75,7 +76,9 @@ export default function WalletStep({
     setError("");
     try {
       // The browser really leaves the site here; Paystack sends it back to /apply.
-      goToPaystack(await startPaystack(token));
+      const checkout = await startPaystack(token);
+      track("payment", "started", { method: "paystack", step: "started" });
+      goToPaystack(checkout);
     } catch (e) {
       setError(errorMessage(e));
       setLeaving(false);
@@ -188,6 +191,7 @@ export default function WalletStep({
                 <p aria-live="polite">{error && <span className="mt-2 block text-xs font-bold text-danger">{error}</span>}</p>
                 <button
                   type="button"
+                  data-track="apply_pay_paystack"
                   onClick={payOnline}
                   disabled={leaving}
                   className="mt-3 flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-teal font-display text-sm font-semibold text-white shadow-lg shadow-teal/20 transition hover:bg-teal-700 disabled:opacity-60 disabled:shadow-none"
@@ -307,6 +311,7 @@ function ManualTransfer({ application, token, fee }: { application: Application;
         refundBank: form.refundBank.trim(),
         proof,
       });
+      track("payment", "transfer_reported", { method: "manual", step: "transfer_reported" });
       // The response is the new application, so the screen above re-renders itself.
     } catch (e) {
       if (e instanceof ApiError && Object.keys(e.errors).length) {
@@ -426,6 +431,7 @@ function ManualTransfer({ application, token, fee }: { application: Application;
       <p aria-live="polite">{errors.form && <span className="block text-xs font-bold text-danger">{errors.form}</span>}</p>
       <button
         type="submit"
+        data-track="apply_pay_transfer"
         disabled={busy}
         className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-navy font-display text-sm font-semibold text-white transition hover:bg-navy-700 disabled:opacity-60"
       >

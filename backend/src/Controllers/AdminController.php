@@ -275,6 +275,7 @@ final class AdminController
             'role' => 'required|in:' . implode(',', Auth::ROLES),
             'jobTitle' => 'nullable|string|max:120',
             'password' => 'required|string|min:10|max:200',
+            'canViewAnalytics' => 'nullable|bool',
         ]);
         $email = strtolower($data['email']);
         if (Database::value('SELECT 1 FROM users WHERE email = ?', [$email])) {
@@ -288,8 +289,13 @@ final class AdminController
             'job_title' => $data['jobTitle'] ?? null,
             'password_hash' => password_hash($data['password'], PASSWORD_DEFAULT),
             'must_change_password' => 1,
+            // Admins always have analytics access, so the flag only matters for other roles.
+            'can_view_analytics' => $data['role'] === 'admin' || !empty($data['canViewAnalytics']) ? 1 : 0,
         ]);
         Activity::staff($admin, "Created {$data['role']} account for {$data['name']}");
+        if ($data['role'] !== 'admin' && !empty($data['canViewAnalytics'])) {
+            Activity::staff($admin, "Gave analytics access to {$data['name']}");
+        }
         Notifier::staff($email, 'Your AI Project Connect staff account', "Hi {$data['name']},\n\nAn admin created a " . Presenter::roleLabel($data['role']) . " account for you. Sign in at " . \App\Support\Links::engineering() . " with {$email} and the temporary password your admin shares with you. You'll be asked to choose a new password.");
         Response::json(Presenter::user(Database::one('SELECT * FROM users WHERE id = ?', [$id])), 201);
     }
@@ -309,6 +315,7 @@ final class AdminController
             'jobTitle' => 'nullable|string|max:120',
             'status' => 'nullable|in:active,disabled',
             'password' => 'nullable|string|min:10|max:200',
+            'canViewAnalytics' => 'nullable|bool',
         ]);
         if ($id === (int) $admin['id'] && ((isset($data['role']) && $data['role'] !== 'admin') || ($data['status'] ?? 'active') === 'disabled')) {
             throw HttpError::badRequest("You can't remove your own admin access.");
@@ -329,6 +336,12 @@ final class AdminController
                 $changes[$col] = $data[$in];
             }
         }
+        $finalRole = $changes['role'] ?? $user['role'];
+        if ($finalRole === 'admin') {
+            $changes['can_view_analytics'] = 1; // forced on for admins
+        } elseif (array_key_exists('canViewAnalytics', $data) && $data['canViewAnalytics'] !== null) {
+            $changes['can_view_analytics'] = $data['canViewAnalytics'] ? 1 : 0;
+        }
         Database::update('users', $changes, ['id' => $id]);
 
         $summary = [];
@@ -340,6 +353,9 @@ final class AdminController
         }
         if (isset($changes['password_hash'])) {
             $summary[] = 'password reset';
+        }
+        if ($finalRole !== 'admin' && isset($changes['can_view_analytics']) && (int) $changes['can_view_analytics'] !== (int) ($user['can_view_analytics'] ?? 0)) {
+            Activity::staff($admin, ($changes['can_view_analytics'] ? 'Gave analytics access to ' : 'Removed analytics access from ') . $user['name']);
         }
         if ($summary) {
             Activity::staff($admin, "Changed {$user['name']}: " . implode(', ', $summary));

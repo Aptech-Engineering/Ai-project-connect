@@ -6,7 +6,8 @@ import { AlertCircle, ArrowDown, ArrowLeft, ArrowRight, CheckCircle2, Clock, Lig
 import { STAGES } from "@/lib/data";
 import { requestClientCode, verifyClientCode } from "@/lib/store";
 import { lookupIdea } from "@/lib/actions";
-import { errorMessage } from "@/lib/api";
+import { ApiError, errorMessage } from "@/lib/api";
+import { track } from "@/lib/track";
 import { IDEA_STATUSES, type IdeaStatus } from "@/lib/ideas";
 import type { Project } from "@/lib/types";
 import { cn } from "@/lib/format";
@@ -153,13 +154,18 @@ function IdStep({ onFound, onIdea }: { onFound: (c: Candidate) => void; onIdea: 
       try {
         if (isIdea) {
           const result = await lookupIdea(id);
+          track("tracker_search", null, { kind: "idea", result: "found" });
           onIdea(result);
           return;
         }
         // The server checks the ID exists and sends the one-time code.
         const sent = await requestClientCode(id);
+        track("tracker_search", null, { kind: "project", result: "found" });
+        track("portal_signin", "code_requested", { step: "code_requested" });
         onFound({ code: id, sentTo: sent.sentTo, devCode: sent.devCode });
       } catch (err) {
+        const status = err instanceof ApiError ? err.status : 0;
+        track("tracker_search", null, { kind: isIdea ? "idea" : "project", result: status === 404 ? "not_found" : status === 429 ? "rate_limited" : "error" });
         fail(errorMessage(err), true);
       } finally {
         setBusy(false);
@@ -211,6 +217,7 @@ function IdStep({ onFound, onIdea }: { onFound: (c: Candidate) => void; onIdea: 
         </div>
         <button
           type="submit"
+          data-track="hero_track"
           disabled={busy || lockedFor > 0}
           className="group relative flex h-12 items-center justify-center gap-2 overflow-hidden rounded-xl bg-brand px-6 font-display text-sm font-semibold text-white transition hover:bg-brand-600 disabled:cursor-not-allowed disabled:opacity-70"
         >
@@ -273,8 +280,10 @@ function OtpStep({ candidate, onBack, onVerified }: { candidate: Candidate; onBa
     void (async () => {
       try {
         await verifyClientCode(candidate.code, code);
+        track("portal_signin", "verified", { step: "verified" });
         onVerified();
       } catch (err) {
+        track("portal_signin", "failed", { step: "failed" });
         setBusy(false);
         shake.start({ x: [0, -10, 10, -7, 7, -3, 0], transition: { duration: 0.45 } });
         setError(errorMessage(err));

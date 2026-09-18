@@ -1,6 +1,8 @@
 import type { Metadata, Viewport } from "next";
 import { Lato, Poppins } from "next/font/google";
+import { Suspense } from "react";
 import "./globals.css";
+import Analytics from "@/components/Analytics";
 
 const poppins = Poppins({
   subsets: ["latin"],
@@ -29,7 +31,13 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={`${poppins.variable} ${lato.variable}`}>
-      <body>{children}</body>
+      <body>
+        {children}
+        {/* Reads the URL, so it sits in its own Suspense boundary for the static export. */}
+        <Suspense fallback={null}>
+          <Analytics />
+        </Suspense>
+      </body>
     </html>
   );
 }

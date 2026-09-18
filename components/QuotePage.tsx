@@ -8,6 +8,7 @@ import { AlertCircle, ArrowRight, CalendarClock, CheckCircle2, Clock, Download, 
 import Logo from "./Logo";
 import { acceptQuote, declineQuote, openQuote, type QuoteView as Quote } from "@/lib/flows";
 import { errorMessage } from "@/lib/api";
+import { track } from "@/lib/track";
 import { formatPrice } from "@/lib/catalog";
 import { openRemoteFile } from "@/lib/files";
 import { cn, formatDate } from "@/lib/format";
@@ -38,7 +39,11 @@ export default function QuotePage() {
     setLoading(true);
     setLoadError("");
     openQuote(ref, token)
-      .then((q) => live && setQuote(q))
+      .then((q) => {
+        if (!live) return;
+        setQuote(q);
+        track("quote", "viewed", { step: "viewed" });
+      })
       .catch((e) => live && setLoadError(errorMessage(e)))
       .finally(() => live && setLoading(false));
     return () => {
@@ -53,6 +58,7 @@ export default function QuotePage() {
     setError("");
     try {
       const res = await acceptQuote(ref, token, name.trim());
+      track("quote", "accepted", { step: "accepted" });
       setResult({ kind: "accepted", registered: res.projectRegistered, sentTo: res.sentTo });
     } catch (err) {
       setError(errorMessage(err));
@@ -68,6 +74,7 @@ export default function QuotePage() {
     setError("");
     try {
       await declineQuote(ref, token, reason.trim() || undefined);
+      track("quote", "declined", { step: "declined" });
       setResult({ kind: "declined" });
     } catch (err) {
       setError(errorMessage(err));

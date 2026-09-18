@@ -71,7 +71,7 @@ export default function Footer({ notify, onSubmitIdea }: { notify: Notify; onSub
                 aria-label="Your email address"
                 className="h-12 flex-1 rounded-xl bg-white px-4 text-navy outline-none placeholder:text-muted focus:ring-4 focus:ring-navy/20"
               />
-              <button className="group flex h-12 items-center justify-center gap-2 rounded-xl bg-navy px-5 font-bold text-white transition hover:bg-navy-950">
+              <button data-track="footer_cta" className="group flex h-12 items-center justify-center gap-2 rounded-xl bg-navy px-5 font-bold text-white transition hover:bg-navy-950">
                 {footer.ctaButton} <ArrowRight className="size-4 transition group-hover:translate-x-1" />
               </button>
             </form>

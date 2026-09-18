@@ -22,6 +22,8 @@ export interface StaffUser {
   status: "active" | "disabled";
   mustChangePassword?: boolean;
   lastLoginAt?: string | null;
+  /** Can open the Analytics dashboard (/analytics). Admins always can. */
+  canViewAnalytics?: boolean;
 }
 
 export const ROLES: Record<StaffRole, { label: string; description: string; className: string }> = {
@@ -128,7 +130,7 @@ export function generatePassword() {
     .replace(/^(.{4})(.{5})(.{5})$/, "$1-$2-$3");
 }
 
-export async function createStaffUser(input: { name: string; email: string; phone?: string; role: StaffRole; jobTitle?: string; password: string }) {
+export async function createStaffUser(input: { name: string; email: string; phone?: string; role: StaffRole; jobTitle?: string; password: string; canViewAnalytics?: boolean }) {
   const user = await api.post<StaffUser>(ADMIN_USERS, {
     name: input.name.trim(),
     email: input.email.trim().toLowerCase(),
@@ -136,12 +138,16 @@ export async function createStaffUser(input: { name: string; email: string; phon
     role: input.role,
     jobTitle: input.jobTitle?.trim() || null,
     password: input.password,
+    canViewAnalytics: input.role === "admin" ? true : Boolean(input.canViewAnalytics),
   });
   await invalidate(ADMIN_USERS, TEAM);
   return user;
 }
 
-export async function updateStaffUser(id: number, patch: { name?: string; phone?: string | null; role?: StaffRole; jobTitle?: string | null; status?: "active" | "disabled" }) {
+export async function updateStaffUser(
+  id: number,
+  patch: { name?: string; phone?: string | null; role?: StaffRole; jobTitle?: string | null; status?: "active" | "disabled"; canViewAnalytics?: boolean },
+) {
   const user = await api.patch<StaffUser>(`${ADMIN_USERS}/${id}`, patch);
   await invalidate(ADMIN_USERS, TEAM, ME);
   return user;

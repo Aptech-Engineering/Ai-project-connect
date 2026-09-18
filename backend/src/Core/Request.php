@@ -9,6 +9,9 @@ final class Request
     /** @var array<string, string> route parameters, e.g. {code} */
     public array $params = [];
 
+    /** The matched route pattern, e.g. /api/staff/projects/{code} (null until routed). Logged instead of the raw path. */
+    public ?string $route = null;
+
     /** @var array<string, mixed>|null */
     private ?array $json = null;
 

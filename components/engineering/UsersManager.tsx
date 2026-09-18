@@ -175,6 +175,7 @@ export default function UsersManager({ notify, projects = [] }: { notify: Notify
                   <div>
                     <span className={cn("rounded-full px-2.5 py-1 text-[11px] font-bold", ROLES[u.role].className)}>{ROLES[u.role].label}</span>
                     {u.jobTitle && u.jobTitle !== ROLES[u.role].label && <p className="mt-1 text-xs text-muted">{u.jobTitle}</p>}
+                    {u.role !== "admin" && u.canViewAnalytics && <p className="mt-1 text-[11px] font-bold text-teal-700">Analytics access</p>}
                   </div>
                   <p className="text-sm text-muted">
                     {u.role === "admin" ? "All projects" : u.role === "counsellor" ? "—" : projects.length ? `${assigned} assigned` : "Set on each project"}
@@ -284,6 +285,7 @@ function UserForm({
   const [phone, setPhone] = useState(existing?.phone ?? "");
   const [role, setRole] = useState<StaffRole>(existing?.role ?? "engineer");
   const [jobTitle, setJobTitle] = useState(existing?.jobTitle ?? "");
+  const [analytics, setAnalytics] = useState(existing?.canViewAnalytics ?? false);
   const [password, setPassword] = useState(() => (existing ? "" : generatePassword()));
   const [showPassword, setShowPassword] = useState(true);
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -310,12 +312,12 @@ function UserForm({
     setBusy(true);
     try {
       if (existing) {
-        await updateStaffUser(existing.id, { name: name.trim(), phone: phone.trim() || null, role, jobTitle: jobTitle.trim() || null });
+        await updateStaffUser(existing.id, { name: name.trim(), phone: phone.trim() || null, role, jobTitle: jobTitle.trim() || null, canViewAnalytics: role === "admin" || analytics });
         notify(`${name.trim()} updated.`);
         onDone();
       } else {
         // The server hashes the password, emails the person and makes them change it.
-        const user = await createStaffUser({ name, email, phone, role, jobTitle, password });
+        const user = await createStaffUser({ name, email, phone, role, jobTitle, password, canViewAnalytics: analytics });
         setCreated({ user, password });
         notify(`${user.name} can now sign in.`);
       }
@@ -381,6 +383,30 @@ function UserForm({
             ))}
           </div>
         </FormField>
+
+        <div className="flex items-start justify-between gap-4 rounded-xl border border-line p-3">
+          <span>
+            <span id="analytics-access-label" className="block text-sm font-bold">
+              Can view analytics
+            </span>
+            <span className="block text-xs text-muted">
+              {role === "admin"
+                ? "Admins always have access to the Analytics dashboard, including revenue and team figures."
+                : "Opens the Analytics dashboard at /analytics with the same sign-in. Revenue and team figures stay admin-only."}
+            </span>
+          </span>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={role === "admin" || analytics}
+            aria-labelledby="analytics-access-label"
+            disabled={role === "admin"}
+            onClick={() => setAnalytics((a) => !a)}
+            className={cn("relative mt-0.5 h-6 w-11 shrink-0 rounded-full transition disabled:opacity-60", role === "admin" || analytics ? "bg-teal" : "bg-line")}
+          >
+            <span className={cn("absolute top-0.5 size-5 rounded-full bg-white shadow transition", role === "admin" || analytics ? "left-[22px]" : "left-0.5")} />
+          </button>
+        </div>
 
         {!existing && (
           <FormField label="Temporary password" error={errors.password} hint="They'll be asked to change it after signing in.">

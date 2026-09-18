@@ -150,6 +150,7 @@ export default function StackPanel({ project, notify }: { project: Project; noti
                         setOpen(isOpen ? null : techId);
                       }}
                       aria-expanded={isOpen}
+                      data-track="portal_learn_this"
                       className={cn(
                         "flex shrink-0 items-center gap-1 rounded-full px-3 py-1.5 text-xs font-bold transition",
                         isOpen ? "bg-white text-navy" : "bg-brand text-white hover:bg-brand-600",
@@ -316,7 +317,7 @@ function InviteTeamMember({ project, techId, courseTitle, notify }: { project: P
 
   if (!open) {
     return (
-      <button onClick={() => setOpen(true)} className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-xl py-2 text-xs font-bold text-muted transition hover:bg-mist hover:text-navy">
+      <button data-track="portal_invite" onClick={() => setOpen(true)} className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-xl py-2 text-xs font-bold text-muted transition hover:bg-mist hover:text-navy">
         <UserPlus className="size-3.5" /> Invite a team member to this course
       </button>
     );
