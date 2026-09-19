@@ -1,78 +1,111 @@
-# AI Project Connect
+# AI Project Connect — Analytics Dashboard
 
-Clients watch their project being built, then learn the stack behind it. An Aptech initiative.
+Frontend for the read-only Analytics dashboard described in the product & technical
+specification (v1.1), built with **Next.js 14 (App Router)**, **TypeScript** and
+**Tailwind CSS**, following the design system in section 11 exactly (brand tokens,
+validated chart palette, Poppins/Lato type pairing).
 
-The website and Client Portal, the Engineering Panel and the PHP API all live in this repo:
+This build ships all 12 screens (Overview, Traffic, Engagement, Funnels, Revenue,
+Projects, Sales pipeline, Clients, Courses, Team, Operations, Realtime), global
+controls (date range, compare, URL-persisted state), the sign-in screen, saved-view
+and definitions UI, and sortable/exportable tables — wired against a **local mock data
+layer** that mirrors the API contract in section 9 (same envelope shape, same KPI/series/
+breakdown/funnel-step building blocks), so swapping in the real API is a matter of
+replacing `lib/mock/generators.ts` calls with `fetch()` calls to `/api/analytics/*`.
 
-```
-/                     Next.js app (public site, Client Portal, /engineering panel)
-/backend              PHP 8.1+ / MySQL API — see backend/README.md
-```
+Auth/session wiring was explicitly out of scope for this build (per your note) — there's
+a working sign-in screen and a role switcher in the top bar (Admin/Staff) so you can see
+how the Revenue and Team screens gate for non-admins, but it's a local mock, not real
+session auth.
 
-The frontend is exported as **static files** and the API answers on the same domain under `/api`,
-so the whole thing runs on ordinary shared hosting such as Nairahost.
-
-```
-yourdomain.com/          → Next.js static export (public_html)
-yourdomain.com/api/...   → the PHP API (public_html/api → ~/apc-backend)
-```
-
-## What's inside
-
-| Area | Highlights |
-|---|---|
-| Public site | Editable content, courses with prices and fliers, course enquiries, idea applications |
-| Applications | Save-and-resume drafts, a ₦2,000 commitment fee by Paystack or bank transfer, receipts and refunds |
-| Client Portal | Project ID + one-time code sign-in, stage and progress, updates, files, messages, milestone approvals, change requests, handover sign-off, the project wallet, "learn this stack" |
-| Engineering Panel | Projects, updates and approvals, ideas inbox, quotes, payments, course leads, reports, activity log, website content, users and roles, Settings |
-| Settings | Paystack keys and mode, the fee and bank account, email/SMS providers — secrets encrypted in the database |
-
-## Run it locally
-
-You need Node 20+, PHP 8.1+ and MySQL.
+## Getting started
 
 ```bash
-# 1. the API (see backend/README.md for the full setup)
-cd backend
-cp config/config.example.php config/config.php     # database details, app.key, cors origin http://127.0.0.1:3000
-php bin/setup.php --demo --admin-name="Your Name" --admin-email=you@example.com --admin-password="a-long-password"
-php -S 127.0.0.1:8088 public/index.php
-
-# 2. the frontend, in another terminal
-cd ..
-cp .env.example .env.local                          # NEXT_PUBLIC_API_BASE=http://127.0.0.1:8088/api
 npm install
-npm run dev                                         # then open http://127.0.0.1:3000
+npm run dev
 ```
 
-The Engineering Panel is at `/engineering`. With `--demo` the API seeds example projects, ideas and staff.
+Open http://localhost:3000 — it redirects to `/analytics`.
 
-**Use the same hostname for both servers** — `127.0.0.1:3000` with the API on `127.0.0.1:8088`, or
-`localhost` for both. Session cookies are `SameSite=Lax`, so a page on `localhost` will not send its
-cookie to an API on `127.0.0.1`: you would be signed out on every request. In production they share a
-domain, so this only bites locally.
-
-## Deploy
+- `/analytics` — the dashboard (Overview by default)
+- `/analytics?view=<screen>` — any screen, e.g. `?view=revenue`
+- `/analytics?view=revenue&from=2026-08-01&to=2026-08-31&compare=previous` — full
+  shareable state, exactly as section 3.1 specifies
+- `/analytics/sign-in` — the branded sign-in screen
 
 ```bash
-rm -f .env.local       # production must NOT point at a local API
-npm run build          # writes ./out — with no NEXT_PUBLIC_API_BASE the app calls /api on its own domain
+npm run build   # production build
+npm run start   # serve the production build
+npm run lint    # eslint
 ```
 
-1. Upload the contents of `out/` to `public_html` (including the `.htaccess` it contains — it serves
-   `/apply`, `/quote` and `/engineering`, leaves `/api` to the back-end, and stops pages being cached
-   into a stale version after a deploy).
-2. Follow **backend/README.md → Deploy to Nairahost** for the API, database and cron jobs.
-3. Sign in to `/engineering` as the admin and open **Settings** to enter the Paystack keys, the bank
-   account for transfers and the email/SMS details. Nothing sensitive goes in a file on the server.
+## Project structure
 
-## How the frontend talks to the API
+```
+app/
+  layout.tsx              Root layout, Google Fonts (Poppins/Lato)
+  page.tsx                Redirects "/" -> "/analytics"
+  analytics/
+    page.tsx               Route entry (Suspense wrapper)
+    AnalyticsApp.tsx        Shell: sidebar, top bar, screen switch, drawer
+    sign-in/page.tsx        Branded sign-in screen (section 11.6)
+components/
+  Sidebar.tsx, MobileNav.tsx        Nav (collapses below 1024px, section 4)
+  GlobalControls.tsx                Date range / compare / export (section 5)
+  ScreenHeader.tsx                  Title, tagline, filter chips, save view, footer
+  KpiTile.tsx                       KPI tiles with delta coloring by goodDirection
+  Card.tsx, ChartFrame.tsx          Card shell + chart/table toggle (accessibility, 13.3)
+  DataTable.tsx                     Sortable table + real CSV export
+  DefinitionsDrawer.tsx             Metric dictionary side drawer
+  StatusPill.tsx                    Good/warning/serious/critical pills (section 11.4)
+  charts/                           LineSeries, ColumnSeries, HorizontalBarList,
+                                     FunnelStrip, Heatmap, DivergingBars, Share100Bar
+  screens/                          One component per screen (section 4.1–4.12)
+lib/
+  types.ts                 Types mirroring the API envelope (section 9.3–9.4)
+  format.ts                Number/currency/percent/duration formatting (section 5)
+  palette.ts                Chart palette + slot assignments (section 11.2)
+  urlState.ts               Date presets + URL query <-> GlobalQuery parsing
+  screens.ts                Screen registry (labels, taglines, admin-only flags)
+  mock/
+    generators.ts           One function per screen returning data shaped like
+                             the real GET /api/analytics/<screen> response
+    builders.ts, rng.ts     Seeded random helpers so numbers stay stable per session
+    session.ts               Local mock of GET /api/analytics/me
+```
 
-- `lib/api.ts` — one fetch wrapper. Sessions are HttpOnly cookies, so every request goes out with
-  `credentials: "include"` and the `X-Requested-With` header the server's CSRF check expects.
-- `lib/remote.ts` — a small cache: one request per key, shared across screens, and `invalidate()`
-  after a change so everything showing that data refreshes itself.
-- `lib/store.ts`, `actions.ts`, `flows.ts`, `ideas.ts`, `wallet.ts`, `settings.ts`, `staff.ts`,
-  `content.ts`, `catalog.ts` — the data layer. Components never call `fetch` directly.
-- Nothing is kept in the browser except the private "continue your application" token, so two people
-  looking at the same project always see the same thing.
+## Wiring up the real API
+
+Every screen component calls a function from `lib/mock/generators.ts` inside a
+`useMemo`, e.g.:
+
+```ts
+const env = useMemo(() => overviewData(query), [query.from, query.to, query.compare]);
+```
+
+To connect the real back end, replace that with a `fetch` to the matching endpoint from
+section 9.5 (e.g. `GET /api/analytics/overview?from=...&to=...&compare=...`), passing
+`credentials: "include"` as the spec requires — the response envelope shape
+(`range`, `compare`, `generatedAt`, `meta`, `data`) already matches `lib/types.ts`, so
+the screen components themselves shouldn't need to change.
+
+## Notes on this build
+
+- **Design system**: brand tokens, validated 8-slot chart palette (never cycled),
+  sequential/ordinal/diverging scales, and status colours all match section 11
+  verbatim in `tailwind.config.ts` and `lib/palette.ts`.
+- **Charts**: line/column series (Recharts), plus hand-built horizontal ranking bars,
+  ordinal-blue funnel strips, a sequential-blue day×hour heatmap, diverging bars and a
+  100%-share bar — matching the chart catalogue in section 12. Every chart has a
+  "Table" toggle (the screen-reader path, section 13.3).
+- **Realtime**: polls every 15s while the tab is visible and pauses on
+  `visibilitychange`, per section 4.12.
+- **Exports**: every table has a working "Export CSV" button. The top-bar export menu
+  triggers a real print-to-PDF via the browser's print stylesheet; wiring Excel/PDF
+  exports to the real `/export` endpoint is a drop-in once the back end is connected.
+- **Accessibility**: chart containers carry `role="img"` with a descriptive
+  `aria-label`; `prefers-reduced-motion` is respected in `globals.css`; focus rings are
+  visible everywhere via `.focus-ring`.
+- **Money labelling**: every revenue KPI carries its `kind` (`cash` / `booked` /
+  `estimate` / `liability` / `pending`) as a small chip on the tile, per section 6.4 —
+  cash and booked figures are never added together.

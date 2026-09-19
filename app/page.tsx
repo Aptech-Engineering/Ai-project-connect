@@ -1,5 +1,5 @@
-import PortalApp from "@/components/PortalApp";
+import { redirect } from "next/navigation";
 
-export default function Home() {
-  return <PortalApp />;
+export default function RootPage() {
+  redirect("/analytics");
 }
