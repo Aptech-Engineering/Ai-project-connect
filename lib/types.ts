@@ -1,255 +1,110 @@
-export type StageKey =
-  | "SUBMITTED"
-  | "UNDER_REVIEW"
-  | "APPROVED"
-  | "DESIGN"
-  | "DEVELOPMENT"
-  | "TESTING"
-  | "DEPLOYMENT"
-  | "DELIVERED"
-  | "ON_HOLD";
+// Types mirroring the API contract, section 9.
 
-export type Tone =
-  | "grey"
-  | "blue"
-  | "orange-soft"
-  | "orange"
-  | "teal-soft"
-  | "teal"
-  | "red";
+export type MetricFormat = "number" | "currency" | "percent" | "duration";
+export type GoodDirection = "up" | "down" | "none";
+export type MoneyKind = "cash" | "booked" | "estimate" | "liability" | "pending" | null;
 
-export interface StageInfo {
+export interface Kpi {
+  key: string;
   label: string;
-  tone: Tone;
-  meaning: string;
-  typical: string;
-  /** Index on the client timeline (Review → Delivered). */
-  step: number;
+  value: number | null;
+  previous?: number | null;
+  change?: number | null;
+  format: MetricFormat;
+  goodDirection: GoodDirection;
+  kind?: MoneyKind;
+  restricted?: boolean;
 }
 
-export interface Person {
-  /** Staff user id when the person is a team member. */
-  id?: number | null;
+export interface SeriesPoint {
+  t: string;
+  value: number;
+  previous?: number | null;
+}
+
+export interface Series {
+  key: string;
+  label?: string;
+  points: SeriesPoint[];
+}
+
+export interface BreakdownRow {
+  key: string;
+  label: string;
+  value: number;
+  share?: number;
+  change?: number | null;
+  extra?: Record<string, number>;
+}
+
+export interface FunnelStep {
+  key: string;
+  label: string;
+  count: number;
+  fromPrevious: number | null;
+  fromStart: number;
+  medianSecondsFromPrevious: number | null;
+}
+
+export interface EnvelopeMeta {
+  trackingSince: string;
+  filters: string[];
+  appliedFilters?: Record<string, string>;
+  includeInternal?: boolean;
+  definitions: Record<string, string>;
+}
+
+export interface Envelope<T> {
+  range: { from: string; to: string; timezone: string; interval: string };
+  compare: { from: string; to: string } | null;
+  generatedAt: string;
+  meta: EnvelopeMeta;
+  data: T;
+}
+
+export type Role = "admin" | "staff";
+
+export interface SessionUser {
+  id: number;
   name: string;
-  role: string;
+  role: Role;
 }
 
-export interface Course {
-  id: string;
-  title: string;
-  duration: string;
-  format: string;
-  nextStart: string | null;
-  /** Full price in the course currency, e.g. 185000. */
-  price: number;
+export interface MeResponse {
+  user: SessionUser;
+  canViewAnalytics: boolean;
+  sections: string[];
+  timezone: string;
   currency: string;
-  description?: string;
-  discountPercent?: number;
-  discountCode?: string;
-  /** Promotional flier image stored in the browser (IndexedDB). */
-  flierId?: string;
-  /** External enrolment / payment page. */
-  enrolUrl?: string;
-  published: boolean;
+  trackingSince: string;
 }
 
-export interface Technology {
-  id: string;
-  name: string;
-  category: string;
-  plain: string;
-  mark: string;
-  color: string;
-  /** Linked course id, or "" when no course is linked. */
-  courseId: string;
-}
+export type ScreenKey =
+  | "overview"
+  | "traffic"
+  | "engagement"
+  | "funnels"
+  | "revenue"
+  | "projects"
+  | "pipeline"
+  | "clients"
+  | "courses"
+  | "team"
+  | "operations"
+  | "realtime";
 
-export interface Update {
-  id: string;
-  date: string;
-  title: string;
-  body: string;
-  author: Person;
-  kind: "update" | "stage";
-  /** Internal notes are never shown to clients. */
-  visibility?: "client" | "internal";
-  /** Waiting for project lead approval before clients see it. */
-  pending?: boolean;
-  demoLink?: string;
-  screenshot?: "onboarding" | "payment" | "dashboard" | "design";
-}
-
-export interface Milestone {
-  id: string;
-  title: string;
-  due: string;
-  completedAt?: string;
-  needsClientApproval?: boolean;
-  clientApprovedAt?: string;
-}
-
-export interface SharedFile {
-  id: string;
-  name: string;
-  kind: "proposal" | "design" | "doc";
-  size: string;
-  date: string;
-  uploadedBy?: string;
-  /** Where the API serves it, e.g. /api/staff/files/abc123. */
-  url?: string;
-  /** Who shared it: the team (default) or the client. */
-  source?: "team" | "client";
-  note?: string;
-}
-
-export type ChangeRequestStatus = "SUBMITTED" | "REVIEWING" | "QUOTED" | "APPROVED" | "DECLINED" | "COMPLETED";
-
-export interface ChangeRequest {
-  id: string;
-  title: string;
-  description: string;
-  requestedBy: "client" | "team";
-  requesterName: string;
-  status: ChangeRequestStatus;
-  impactCost?: number;
-  impactDays?: number;
-  currency: string;
-  responseNote?: string;
-  createdAt: string;
-  decidedAt?: string;
-}
-
-export interface HandoverItem {
-  id: string;
-  title: string;
-  doneAt?: string;
-  doneBy?: string;
-}
-
-export interface Handover {
-  requestedAt?: string;
-  signedAt?: string;
-  signedName?: string;
-  supportPlan?: string;
-  items: HandoverItem[];
-}
-
-export interface CourseEvent {
-  id: string;
-  at: string;
-  event: "view" | "click" | "request" | "enrol" | "invite";
-  courseId: string;
-  techId?: string;
-  projectCode?: string;
-}
-
-export interface ActivityEntry {
-  id: string;
-  at: string;
-  actorType: "staff" | "client" | "system";
-  actor: string;
-  action: string;
-  projectCode?: string;
-}
-
-export interface Message {
-  id: string;
-  at: string;
-  from: "client" | "team";
-  author: string;
-  text: string;
-}
-
-export type LeadStatus = "NEW" | "CONTACTED" | "ENROLLED" | "NOT_INTERESTED";
-
-export interface CourseLead {
-  id: string;
-  at: string;
-  /** Empty for enquiries from the public courses section. */
-  projectCode: string;
-  projectTitle: string;
-  clientName: string;
-  contact?: string;
-  techId: string;
-  courseId: string;
-  type: "info" | "enrol";
-  source?: "portal" | "website" | "invite";
-  invitedBy?: string;
-  status: LeadStatus;
-  notes?: string;
-}
-
-export interface Notice {
-  id: string;
-  at: string;
-  audience: "client" | "staff" | "counsellor";
-  channel: "email" | "sms" | "email+sms";
+export interface GlobalQuery {
+  view: ScreenKey;
+  from: string;
   to: string;
-  subject: string;
-  body: string;
-  projectCode?: string;
-}
-
-export interface Activity {
-  id: string | number;
-  at: string;
-  actor: string;
-  action: string;
-  actorType?: "staff" | "client" | "system";
-  projectCode?: string | null;
-  projectTitle?: string | null;
-  /** Where the action came from, for the audit trail. */
-  ip?: string | null;
-}
-
-export interface Project {
-  code: string;
-  title: string;
-  tagline: string;
-  category: string;
-  platforms: string;
-  client: { name: string; short: string; emailMasked: string; phoneMasked: string; email?: string; phone?: string; organisation?: string };
-  lead: Person;
-  team: Person[];
-  stage: StageKey;
-  /** Where the project was paused, for ON_HOLD. */
-  pausedAtStep?: number;
-  holdReason?: string;
-  progress: number;
-  startDate: string;
-  targetDate: string;
-  deliveredDate?: string;
-  updates: Update[];
-  milestones: Milestone[];
-  stack: { techId: string; usage: string }[];
-  files: SharedFile[];
-  activity?: Activity[];
-  messages?: Message[];
-  rating?: { stars: number; text?: string; at: string };
-  promosOptOut?: boolean;
-  /** Weekly progress email (NT-04). */
-  digestOptOut?: boolean;
-  changeRequests?: ChangeRequest[];
-  handover?: Handover;
-  /** Commitment fee ledger of the application this project came from, when there was one. */
-  wallet?: WalletLedgerEntry[] | null;
-  /** Courses the client has already asked about from this project (client view only). */
-  courseRequests?: { techId: string; type: "info" | "enrol" }[];
-  budget?: string;
-  /** Old Project IDs that were regenerated and no longer grant access. */
-  revokedCodes?: string[];
-}
-
-/** One line of a commitment fee ledger, as the API returns it. */
-export interface WalletLedgerEntry {
-  type: "fee" | "payment" | "refund";
-  label: string;
-  amount: number;
-  currency: string;
-  status: string;
-  reference?: string | null;
-  at?: string | null;
-  method?: string | null;
-  receiptNo?: string | null;
-  note?: string | null;
+  compare: "none" | "previous" | "year";
+  interval: "auto" | "hour" | "day" | "week" | "month";
+  source?: string;
+  device?: string;
+  country?: string;
+  state?: string;
+  category?: string;
+  method?: string;
+  includeInternal?: "0" | "1";
+  funnel?: "application" | "sales" | "portal" | "courses";
 }

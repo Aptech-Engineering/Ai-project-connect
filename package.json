@@ -1,28 +1,29 @@
 {
-  "name": "ai-project-connect",
+  "name": "apc-analytics",
+  "version": "1.1.0",
   "private": true,
-  "version": "0.1.0",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "serve": "node scripts/serve-static.mjs out 3000"
+    "lint": "next lint"
   },
   "dependencies": {
-    "framer-motion": "^13.3.0",
-    "jspdf": "^4.2.1",
-    "lucide-react": "^1.46.0",
-    "next": "^15.5.25",
-    "react": "^19.3.0",
-    "react-dom": "^19.3.0"
+    "next": "14.2.35",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "recharts": "^2.12.7",
+    "clsx": "^2.1.1"
   },
   "devDependencies": {
-    "@tailwindcss/postcss": "^4.3.3",
-    "@types/node": "^26.5.1",
-    "@types/react": "^19.3.0",
-    "@types/react-dom": "^19.3.0",
-    "postcss": "^8.5.28",
-    "tailwindcss": "^4.3.3",
-    "typescript": "^5.9.3"
+    "typescript": "^5.5.4",
+    "@types/node": "^20.14.15",
+    "@types/react": "^18.3.4",
+    "@types/react-dom": "^18.3.0",
+    "eslint": "^8.57.0",
+    "eslint-config-next": "14.2.35",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.41",
+    "tailwindcss": "^3.4.10"
   }
 }
