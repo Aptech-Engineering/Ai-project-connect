@@ -25,6 +25,7 @@ yourdomain.com/api/...   → the PHP API (public_html/api → ~/apc-backend)
 | Applications | Save-and-resume drafts, a ₦2,000 commitment fee by Paystack or bank transfer, receipts and refunds |
 | Client Portal | Project ID + one-time code sign-in, stage and progress, updates, files, messages, milestone approvals, change requests, handover sign-off, the project wallet, "learn this stack" |
 | Engineering Panel | Projects, updates and approvals, ideas inbox, quotes, payments, course leads, reports, activity log, website content, users and roles, Settings |
+| Analytics | `/analytics` — twelve screens (traffic, funnels, revenue, projects, clients, operations, realtime…), saved views, scheduled email reports, CSV/Excel export |
 | Settings | Paystack keys and mode, the fee and bank account, email/SMS providers — secrets encrypted in the database |
 
 ## Run it locally
@@ -74,5 +75,15 @@ npm run build          # writes ./out — with no NEXT_PUBLIC_API_BASE the app c
   after a change so everything showing that data refreshes itself.
 - `lib/store.ts`, `actions.ts`, `flows.ts`, `ideas.ts`, `wallet.ts`, `settings.ts`, `staff.ts`,
   `content.ts`, `catalog.ts` — the data layer. Components never call `fetch` directly.
+- `lib/analytics/api.ts` — the same pattern for the dashboard: every screen is one `GET
+  /api/analytics/<screen>` with the global date range and filters; nothing is computed in the browser.
 - Nothing is kept in the browser except the private "continue your application" token, so two people
   looking at the same project always see the same thing.
+
+## Analytics
+
+`/analytics` is the dashboard, signed in with the same staff account as the Engineering Panel. Admins
+see everything; other staff need the "analytics access" flag an admin sets in Users, and the Revenue
+and Team sections stay admin-only. Visits are counted by a first-party tracker (`lib/track.ts` →
+`POST /api/track`) — no third-party analytics, no cookies for tracking, no IP addresses stored. The
+dashboard spec (screens, metrics and their definitions) is in `docs/analytics/ANALYTICS_DASHBOARD_SPEC.md`.
