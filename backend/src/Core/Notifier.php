@@ -49,6 +49,26 @@ final class Notifier
         self::email('staff', $to, $subject, $body, $projectId);
     }
 
+    /**
+     * A new course lead: every active counsellor hears about it, plus the admissions inbox when one is set.
+     * With no counsellor accounts yet, the admins are told instead, so a lead is never missed.
+     */
+    public static function counsellors(string $subject, string $body, ?int $projectId = null): void
+    {
+        $emails = array_column(Database::all("SELECT email FROM users WHERE role = 'counsellor' AND status = 'active'"), 'email');
+        if ($emails === []) {
+            $emails = array_column(Database::all("SELECT email FROM users WHERE role = 'admin' AND status = 'active'"), 'email');
+        }
+        $admissions = (string) Config::get('notifications.admissions_email');
+        if ($admissions !== '' && !str_ends_with($admissions, '@yourdomain.com')) {
+            $emails[] = $admissions;
+        }
+        $body .= "\n\nOpen Course leads in the Engineering Panel to follow up: " . \App\Support\Links::engineering();
+        foreach (array_unique(array_map('strtolower', $emails)) as $email) {
+            self::email('counsellor', $email, $subject, $body, $projectId);
+        }
+    }
+
     private static function queue(string $audience, string $channel, string $to, string $subject, string $body, ?int $projectId, ?string $html = null, array $attachments = []): void
     {
         $row = [

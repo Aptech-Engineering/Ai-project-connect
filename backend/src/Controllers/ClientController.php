@@ -209,9 +209,7 @@ final class ClientController
             'type' => $data['type'],
         ]);
         ReportsController::recordEvent($data['type'] === 'enrol' ? 'enrol' : 'request', $row['course_id'], $row['tech_id'], (int) $project['id']);
-        Notifier::email(
-            'counsellor',
-            (string) Config::get('notifications.admissions_email'),
+        Notifier::counsellors(
             sprintf('New %s: %s', $data['type'] === 'enrol' ? 'enrolment' : 'info request', $row['course_title']),
             "{$client['name']} ({$project['title']}) clicked \"" . ($data['type'] === 'enrol' ? 'Enrol' : 'Request info') . "\" on {$row['tech_name']}.",
             (int) $project['id'],
@@ -315,7 +313,7 @@ final class ClientController
             $price,
             $discount,
         ), (int) $project['id']);
-        Notifier::email('counsellor', (string) Config::get('notifications.admissions_email'), "Course invite: {$row['title']}", "{$client['name']} ({$project['title']}) invited {$data['name']} <{$data['email']}> to {$row['title']}.", (int) $project['id']);
+        Notifier::counsellors("Course invite: {$row['title']}", "{$client['name']} ({$project['title']}) invited {$data['name']} <{$data['email']}> to {$row['title']}.", (int) $project['id']);
         Activity::client($client, "Invited {$data['name']} to the {$row['tech_name']} course", (int) $project['id']);
         Response::json(['id' => $id], 201);
     }

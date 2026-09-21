@@ -98,9 +98,7 @@ final class PublicController
             'source' => 'website',
         ]);
         ReportsController::recordEvent($data['type'] === 'enrol' ? 'enrol' : 'request', $course['id']);
-        Notifier::email(
-            'counsellor',
-            (string) Config::get('notifications.admissions_email'),
+        Notifier::counsellors(
             sprintf('New %s from the website: %s', $data['type'] === 'enrol' ? 'enrolment' : 'info request', $course['title']),
             "{$data['name']} ({$data['contact']}) asked about {$course['title']}.",
         );
