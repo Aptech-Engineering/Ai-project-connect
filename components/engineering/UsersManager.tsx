@@ -212,7 +212,22 @@ export default function UsersManager({ notify, projects = [] }: { notify: Notify
               </button>
             </li>
           )}
-          {!loading && !error && list.length === 0 && <li className="py-14 text-center text-sm text-muted">No users match.</li>}
+          {!loading && !error && list.length === 0 && (
+            <li className="py-14 text-center text-sm text-muted">
+              {q
+                ? "No users match your search."
+                : filter === "DISABLED"
+                  ? "No disabled accounts."
+                  : filter !== "ALL"
+                    ? `No ${ROLES[filter as keyof typeof ROLES].label.toLowerCase()} accounts yet.`
+                    : "No users yet."}
+              {filter !== "ALL" && (
+                <button onClick={() => setFilter("ALL")} className="ml-2 font-bold text-brand hover:underline">
+                  Show all users
+                </button>
+              )}
+            </li>
+          )}
         </ul>
       </div>
 

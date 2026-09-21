@@ -63,6 +63,25 @@
     outline: 2px solid var(--color-brand);
     outline-offset: 3px;
   }
+
+  /* Tailwind v4 gives buttons the default arrow; anything clickable should show the hand. */
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  select:not(:disabled),
+  summary,
+  label[for],
+  input[type="checkbox"]:not(:disabled),
+  input[type="radio"]:not(:disabled),
+  input[type="file"]:not(:disabled),
+  input[type="submit"]:not(:disabled),
+  input[type="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+  button:disabled,
+  select:disabled,
+  input:disabled {
+    cursor: not-allowed;
+  }
 }
 
 @utility container-page {
@@ -78,6 +97,22 @@
 @utility bg-dots {
   background-image: radial-gradient(rgb(255 255 255 / 0.09) 1px, transparent 1px);
   background-size: 22px 22px;
+}
+
+/* A slim scrollbar for the dark sidebars, visible but quiet. */
+@utility sidebar-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(255 255 255 / 0.25) transparent;
+  &::-webkit-scrollbar {
+    width: 6px;
+  }
+  &::-webkit-scrollbar-thumb {
+    background: rgb(255 255 255 / 0.25);
+    border-radius: 9999px;
+  }
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
 }
 
 @utility no-scrollbar {

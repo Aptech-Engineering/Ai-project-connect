@@ -184,8 +184,8 @@ export default function Dashboard({ onSignOut, notify }: { onSignOut: () => void
           ))}
         </svg>
         <SidebarBrand />
-        <div className="relative mt-8 flex-1">{nav}</div>
-        <div className="relative">{account}</div>
+        <div className="sidebar-scroll relative -mr-2 mt-8 min-h-0 flex-1 overflow-y-auto pr-2">{nav}</div>
+        <div className="relative mt-3 shrink-0">{account}</div>
       </aside>
 
       {/* mobile top bar */}

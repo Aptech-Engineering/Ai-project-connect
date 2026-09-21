@@ -17,7 +17,7 @@ export function Sidebar({
   const visible = SCREENS.filter((s) => session.sections.includes(s.key));
 
   return (
-    <aside className="hidden lg:flex lg:flex-col lg:w-60 shrink-0 bg-navy text-white min-h-screen sticky top-0">
+    <aside className="hidden lg:flex lg:flex-col lg:w-60 shrink-0 bg-navy text-white h-screen self-start sticky top-0">
       <div className="flex items-center gap-2 px-5 h-16 border-b border-navy-700">
         <div className="h-8 w-8 rounded-lg bg-brand flex items-center justify-center font-display font-semibold text-sm">
           AI
@@ -28,7 +28,7 @@ export function Sidebar({
         </div>
       </div>
 
-      <nav className="flex-1 py-3 px-2 space-y-0.5 overflow-y-auto">
+      <nav className="sidebar-scroll min-h-0 flex-1 py-3 px-2 space-y-0.5 overflow-y-auto">
         {visible.map((s) => {
           const isActive = s.key === active;
           return (
