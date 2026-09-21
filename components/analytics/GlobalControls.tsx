@@ -3,6 +3,7 @@
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useState } from "react";
 import { DATE_PRESETS, presetToRange, buildQueryString } from "@/lib/analytics/urlState";
+import { exportUrl } from "@/lib/analytics/api";
 import type { GlobalQuery } from "@/lib/analytics/types";
 
 const COMPARE_LABEL: Record<string, string> = {
@@ -120,8 +121,26 @@ export function GlobalControls({ query }: { query: GlobalQuery }) {
             >
               Print / save screen as PDF
             </button>
+            {query.view !== "realtime" && (
+              <>
+                <a
+                  href={exportUrl(query.view, "", query, "xlsx")}
+                  onClick={() => setExportOpen(false)}
+                  className="focus-ring block w-full rounded-lg px-3 py-1.5 text-left text-sm text-navy hover:bg-mist"
+                >
+                  Excel — every table on this screen
+                </a>
+                <a
+                  href={exportUrl(query.view, "", query, "csv")}
+                  onClick={() => setExportOpen(false)}
+                  className="focus-ring block w-full rounded-lg px-3 py-1.5 text-left text-sm text-navy hover:bg-mist"
+                >
+                  CSV — first table on this screen
+                </a>
+              </>
+            )}
             <p className="px-3 pt-1 text-[11px] leading-snug text-muted">
-              Table-level CSV and Excel exports are on each table below.
+              Downloads use this date range and filters. Each table also has its own CSV button.
             </p>
           </div>
         )}

@@ -105,7 +105,7 @@ export function useRealtime<T>(intervalMs = 15000) {
 
 /** Download link for a table on a screen (CSV or Excel), with the same filters. */
 export function exportUrl(view: string, table: string, q: GlobalQuery, format: "csv" | "xlsx") {
-  return apiUrl(`/analytics/export${params(q, { view, table, format })}`);
+  return apiUrl(`/analytics/export${params(q, { view, table, format, funnel: view === "funnels" ? q.funnel : undefined })}`);
 }
 
 /* ---------------- Saved views (spec 10.2) and scheduled reports (spec 10.3) ---------------- */

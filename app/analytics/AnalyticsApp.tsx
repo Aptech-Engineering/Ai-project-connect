@@ -126,7 +126,13 @@ export function AnalyticsApp() {
             onSave={() => router.replace(`/analytics${buildQueryString({}, searchParams)}&panel=views&save=1`)}
             filters={
               query.source
-                ? [{ label: "Source", value: query.source, onClear: () => {} }]
+                ? [
+                    {
+                      label: "Source",
+                      value: query.source,
+                      onClear: () => router.replace(`/analytics${buildQueryString({ source: undefined }, searchParams)}`),
+                    },
+                  ]
                 : undefined
             }
           />
