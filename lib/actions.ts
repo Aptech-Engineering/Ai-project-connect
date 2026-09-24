@@ -234,8 +234,14 @@ export async function inviteToCourse(code: string, input: { techId: string; name
 /* ================= public ================= */
 
 /** Enquiry from the courses section of the website — no project and no sign-in. */
-export async function requestCourseEnquiry(courseId: string, type: "info" | "enrol", name: string, contact: string) {
-  const lead = await api.post<{ id: number }>("/course-enquiries", { courseId, type, name: name.trim(), contact: contact.trim() });
+export async function requestCourseEnquiry(courseId: string, type: "info" | "enrol", name: string, email: string, phone: string) {
+  const lead = await api.post<{ id: number }>("/course-enquiries", {
+    courseId,
+    type,
+    name: name.trim(),
+    email: email.trim(),
+    phone: phone.trim(),
+  });
   await refreshLeads();
   return lead;
 }

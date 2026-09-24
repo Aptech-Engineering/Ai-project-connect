@@ -169,7 +169,10 @@ export interface CourseLead {
   projectCode: string;
   projectTitle: string;
   clientName: string;
+  /** The one-line version, kept for older records. */
   contact?: string;
+  email?: string | null;
+  phone?: string | null;
   techId: string;
   courseId: string;
   type: "info" | "enrol";
@@ -177,6 +180,19 @@ export interface CourseLead {
   invitedBy?: string;
   status: LeadStatus;
   notes?: string;
+  /** Follow-up emails a counsellor has already sent, oldest first. */
+  messages?: LeadMessage[];
+}
+
+export interface LeadMessage {
+  id: number;
+  at: string;
+  by: string;
+  to: string;
+  subject: string;
+  body: string;
+  /** What the outbox did with it: queued, sent, failed or logged. */
+  delivery: "queued" | "sent" | "failed" | "logged";
 }
 
 export interface Notice {

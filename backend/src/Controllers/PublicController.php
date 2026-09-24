@@ -84,15 +84,23 @@ final class PublicController
             'courseId' => 'required|string|max:60',
             'type' => 'required|in:info,enrol',
             'name' => 'required|string|min:2|max:120',
-            'contact' => 'required|string|min:6|max:190',
+            'email' => 'required|email|max:190',
+            'phone' => 'required|string|min:7|max:40',
+            // Older clients sent one free-text field; still accepted so a cached page keeps working.
+            'contact' => 'nullable|string|max:190',
         ]);
         $course = Database::one('SELECT id, title FROM courses WHERE id = ? AND published = 1', [$data['courseId']]);
         if ($course === null) {
             throw HttpError::notFound('Course not found.');
         }
+        $email = strtolower(trim($data['email']));
+        $phone = trim($data['phone']);
         $id = Database::insert('leads', [
             'client_name' => $data['name'],
-            'contact' => $data['contact'],
+            // `contact` stays the one-line version the older screens read.
+            'contact' => trim($email . ' · ' . $phone, ' ·'),
+            'email' => $email,
+            'phone' => $phone,
             'course_id' => $course['id'],
             'type' => $data['type'],
             'source' => 'website',
@@ -100,7 +108,9 @@ final class PublicController
         ReportsController::recordEvent($data['type'] === 'enrol' ? 'enrol' : 'request', $course['id']);
         Notifier::counsellors(
             sprintf('New %s from the website: %s', $data['type'] === 'enrol' ? 'enrolment' : 'info request', $course['title']),
-            "{$data['name']} ({$data['contact']}) asked about {$course['title']}.",
+            "{$data['name']} asked about {$course['title']}.
+Email: {$email}
+Phone: {$phone}",
         );
         Response::json(['id' => $id, 'message' => 'A course counsellor will contact you soon.'], 201);
     }

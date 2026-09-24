@@ -331,6 +331,8 @@ CREATE TABLE leads (
   project_id     INT UNSIGNED NULL,
   client_name    VARCHAR(120) NOT NULL,
   contact        VARCHAR(190) NULL,
+  email          VARCHAR(190) NULL,
+  phone          VARCHAR(40) NULL,
   technology_id  VARCHAR(60) NULL,
   course_id      VARCHAR(60) NULL,
   type           ENUM('info','enrol') NOT NULL,
@@ -351,9 +353,25 @@ CREATE TABLE leads (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Email/SMS outbox. Rows are sent by bin/send-notifications.php (cron) or immediately.
+CREATE TABLE lead_messages (
+  id              INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  lead_id         INT UNSIGNED NOT NULL,
+  staff_id        INT UNSIGNED NULL,
+  staff_name      VARCHAR(120) NOT NULL,
+  channel         ENUM('email') NOT NULL DEFAULT 'email',
+  recipient       VARCHAR(190) NOT NULL,
+  subject         VARCHAR(255) NOT NULL,
+  body            TEXT NOT NULL,
+  notification_id INT UNSIGNED NULL,
+  created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_lead_messages_lead (lead_id, created_at),
+  CONSTRAINT fk_lead_messages_lead FOREIGN KEY (lead_id) REFERENCES leads(id) ON DELETE CASCADE,
+  CONSTRAINT fk_lead_messages_staff FOREIGN KEY (staff_id) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE notifications (
   id          INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-  audience    ENUM('client','staff','counsellor') NOT NULL,
+  audience    ENUM('client','staff','counsellor','lead') NOT NULL,
   channel     ENUM('email','sms') NOT NULL,
   recipient   VARCHAR(190) NOT NULL,
   subject     VARCHAR(255) NOT NULL,

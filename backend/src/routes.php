@@ -131,6 +131,7 @@ return static function (Router $r): void {
 
     $r->get('/api/staff/leads', [Leads::class, 'index']);
     $r->patch('/api/staff/leads/{id}', [Leads::class, 'update']);
+    $r->post('/api/staff/leads/{id}/messages', [Leads::class, 'sendMessage']);
 
     /* ---------- analytics (spec section 9) ---------- */
     $r->post('/api/track', [Track::class, 'ingest']);

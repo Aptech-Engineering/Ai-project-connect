@@ -2,11 +2,11 @@
 
 import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { AlertTriangle, BellRing, CheckCheck, GraduationCap, Loader2, Mail, MessageCircle, MessageSquareText, RotateCw, Smartphone } from "lucide-react";
+import { AlertTriangle, BellRing, CheckCheck, GraduationCap, Loader2, Mail, MessageCircle, MessageSquareText, Phone, RotateCw, Send, Smartphone } from "lucide-react";
 import { useCatalog } from "@/lib/catalog";
 import { errorMessage } from "@/lib/api";
 import { postTeamReply } from "@/lib/actions";
-import { refreshLeads, refreshNotifications, refreshProjects, updateLead, useLeads, useMessageThreads, useNotifications, type MessageThread } from "@/lib/store";
+import { refreshLeads, refreshNotifications, refreshProjects, sendLeadMessage, updateLead, useLeads, useMessageThreads, useNotifications, type MessageThread } from "@/lib/store";
 import { cn, relativeDay } from "@/lib/format";
 import type { CourseLead, LeadStatus, Notice } from "@/lib/types";
 import type { Notify } from "../PortalApp";
@@ -198,6 +198,27 @@ function LeadRow({ lead, notify }: { lead: CourseLead; notify: Notify }) {
   const [busy, setBusy] = useState(false);
   const tech = technologies[lead.techId];
   const course = courses[lead.courseId];
+  const email = (lead.email ?? (lead.contact?.includes("@") ? lead.contact.split("·")[0].trim() : "")) || "";
+  const phone = (lead.phone ?? (lead.contact && !lead.contact.includes("@") ? lead.contact : "")) || "";
+  const sentMessages = lead.messages ?? [];
+  const [composing, setComposing] = useState(false);
+  const [subject, setSubject] = useState(`About ${course?.title ?? "your course enquiry"}`);
+  const [body, setBody] = useState("");
+
+  const sendEmail = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await sendLeadMessage(Number(lead.id), subject.trim(), body.trim());
+      setComposing(false);
+      setBody("");
+      notify(`Email sent to ${lead.clientName}.`, "info");
+    } catch (e) {
+      notify(errorMessage(e), "info");
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const save = async (patch: { status?: LeadStatus; notes?: string }, message?: string) => {
     if (busy) return;
@@ -235,16 +256,114 @@ function LeadRow({ lead, notify }: { lead: CourseLead; notify: Notify }) {
                 From {lead.projectTitle} (<span className="font-mono">{lead.projectCode}</span>) via {tech?.name ?? "stack panel"}
               </>
             ) : (
-              <>From the website courses section{lead.contact ? ` · ${lead.contact}` : ""}</>
+              <>From the website courses section</>
             )}{" "}
             · {relativeDay(lead.at)}
           </p>
+
+          {/* How to reach them. Both are links, so one tap writes or dials. */}
+          <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+            {email ? (
+              <a href={`mailto:${email}`} className="inline-flex items-center gap-1.5 font-medium text-navy hover:text-brand">
+                <Mail className="size-4 text-brand" /> {email}
+              </a>
+            ) : (
+              <span className="inline-flex items-center gap-1.5 text-muted">
+                <Mail className="size-4" /> No email given
+              </span>
+            )}
+            {phone ? (
+              <a href={`tel:${phone.replace(/[^\d+]/g, "")}`} className="inline-flex items-center gap-1.5 font-medium text-navy hover:text-brand">
+                <Phone className="size-4 text-brand" /> {phone}
+              </a>
+            ) : (
+              <span className="inline-flex items-center gap-1.5 text-muted">
+                <Phone className="size-4" /> No phone given
+              </span>
+            )}
+          </div>
+
+          {/* What has already been sent, so the next person doesn't repeat it. */}
+          {sentMessages.length > 0 && (
+            <ul className="mt-3 space-y-1.5">
+              {sentMessages.map((m) => (
+                <li key={m.id} className="rounded-lg bg-mist px-3 py-2 text-xs">
+                  <p className="font-semibold text-navy">
+                    {m.subject}
+                    <span className="ml-2 font-normal text-muted">
+                      {m.by} · {relativeDay(m.at)} · {m.delivery === "failed" ? "not delivered" : m.delivery === "sent" ? "sent" : m.delivery === "logged" ? "recorded only" : "queued"}
+                    </span>
+                  </p>
+                  <p className="mt-0.5 whitespace-pre-wrap text-muted">{m.body}</p>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {/* Write to them from here. Only an email can be sent; phone is a call. */}
+          {composing ? (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                void sendEmail();
+              }}
+              className="mt-3 rounded-xl border border-line p-3"
+            >
+              <label className="block text-xs font-bold text-navy" htmlFor={`lead-subject-${lead.id}`}>
+                Subject
+              </label>
+              <input
+                id={`lead-subject-${lead.id}`}
+                value={subject}
+                onChange={(e) => setSubject(e.target.value)}
+                disabled={busy}
+                className="mt-1 h-9 w-full rounded-lg border border-line px-3 text-sm outline-none focus:border-brand"
+              />
+              <label className="mt-2 block text-xs font-bold text-navy" htmlFor={`lead-body-${lead.id}`}>
+                Message
+              </label>
+              <textarea
+                id={`lead-body-${lead.id}`}
+                value={body}
+                onChange={(e) => setBody(e.target.value)}
+                rows={4}
+                disabled={busy}
+                placeholder={`Hello ${lead.clientName.split(" ")[0]}, thanks for your interest in ${course?.title ?? "the course"}…`}
+                className="mt-1 w-full rounded-lg border border-line px-3 py-2 text-sm outline-none focus:border-brand"
+              />
+              <p className="mt-1 text-[11px] text-muted">Goes to {email} from AI Project Connect. They can reply to that email.</p>
+              <div className="mt-2 flex gap-2">
+                <button
+                  type="submit"
+                  disabled={busy || subject.trim().length < 2 || body.trim().length < 2}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-brand px-3 py-1.5 text-xs font-bold text-white disabled:opacity-40"
+                >
+                  {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Send className="size-3.5" />}
+                  {busy ? "Sending…" : "Send email"}
+                </button>
+                <button type="button" onClick={() => setComposing(false)} className="rounded-lg border border-line px-3 py-1.5 text-xs font-bold text-navy">
+                  Cancel
+                </button>
+              </div>
+            </form>
+          ) : (
+            email && (
+              <button
+                onClick={() => setComposing(true)}
+                disabled={busy}
+                className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-line px-3 py-1.5 text-xs font-bold text-navy hover:border-brand hover:text-brand disabled:opacity-40"
+              >
+                <Send className="size-3.5" /> {sentMessages.length ? "Send another email" : "Send an email"}
+              </button>
+            )
+          )}
+
           <input
             defaultValue={lead.notes}
             disabled={busy}
-            aria-label={`Follow-up note for ${lead.clientName}`}
+            aria-label={`Internal note for ${lead.clientName}`}
             onBlur={(e) => e.target.value !== (lead.notes ?? "") && void save({ notes: e.target.value })}
-            placeholder="Add a follow-up note…"
+            placeholder="Internal note — only staff see this…"
             className="mt-3 h-9 w-full rounded-lg border border-line px-3 text-sm outline-none focus:border-brand disabled:opacity-60"
           />
         </div>

@@ -245,18 +245,21 @@ export function CoursesSection({ notify }: { notify: Notify }) {
 
 function EnquiryDialog({ request, onClose, notify }: { request: { course: Course; type: "info" | "enrol" } | null; onClose: () => void; notify: Notify }) {
   const [name, setName] = useState("");
-  const [contact, setContact] = useState("");
+  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
   const [sent, setSent] = useState(false);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
-  const valid = name.trim().length > 1 && contact.trim().length > 5;
+  // A counsellor needs both: the email to write, the phone to call.
+  const valid = name.trim().length > 1 && /^\S+@\S+\.\S+$/.test(email.trim()) && phone.replace(/\D/g, "").length >= 7;
 
   const close = () => {
     onClose();
     window.setTimeout(() => {
       setSent(false);
       setName("");
-      setContact("");
+      setEmail("");
+      setPhone("");
       setError("");
     }, 300);
   };
@@ -266,7 +269,7 @@ function EnquiryDialog({ request, onClose, notify }: { request: { course: Course
     setSending(true);
     setError("");
     try {
-      await requestCourseEnquiry(request.course.id, request.type, name.trim(), contact.trim());
+      await requestCourseEnquiry(request.course.id, request.type, name.trim(), email.trim(), phone.trim());
       setSent(true);
       notify("Enquiry sent to our course counsellors.");
     } catch (e) {
@@ -318,10 +321,32 @@ function EnquiryDialog({ request, onClose, notify }: { request: { course: Course
                   Full name
                 </label>
                 <input id="enq-name" value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" className="mt-1.5 h-11 w-full rounded-xl border border-line px-3.5 text-sm outline-none focus:border-brand focus:ring-4 focus:ring-brand/15" />
-                <label className="mt-3 block text-sm font-bold" htmlFor="enq-contact">
-                  Email or phone
+                <label className="mt-3 block text-sm font-bold" htmlFor="enq-email">
+                  Email
                 </label>
-                <input id="enq-contact" value={contact} onChange={(e) => setContact(e.target.value)} autoComplete="email" className="mt-1.5 h-11 w-full rounded-xl border border-line px-3.5 text-sm outline-none focus:border-brand focus:ring-4 focus:ring-brand/15" />
+                <input
+                  id="enq-email"
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  autoComplete="email"
+                  placeholder="you@example.com"
+                  className="mt-1.5 h-11 w-full rounded-xl border border-line px-3.5 text-sm outline-none placeholder:text-muted/70 focus:border-brand focus:ring-4 focus:ring-brand/15"
+                />
+                <label className="mt-3 block text-sm font-bold" htmlFor="enq-phone">
+                  Phone number
+                </label>
+                <input
+                  id="enq-phone"
+                  type="tel"
+                  inputMode="tel"
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                  autoComplete="tel"
+                  placeholder="0803 000 0000"
+                  className="mt-1.5 h-11 w-full rounded-xl border border-line px-3.5 text-sm outline-none placeholder:text-muted/70 focus:border-brand focus:ring-4 focus:ring-brand/15"
+                />
+                <p className="mt-1.5 text-xs text-muted">A counsellor will email you and may call this number.</p>
                 <div aria-live="polite" className="min-h-0">
                   {error && <p className="mt-3 text-sm font-bold text-danger">{error}</p>}
                 </div>

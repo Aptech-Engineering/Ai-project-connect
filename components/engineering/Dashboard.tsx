@@ -12,6 +12,7 @@ import {
   FolderKanban,
   Inbox,
   BarChart3,
+  RefreshCw,
   History,
   UserPlus,
   KeyRound,
@@ -39,6 +40,7 @@ import { refreshProjects, useApprovals, useDashboard, useStaffProjects, type Das
 import { errorMessage } from "@/lib/api";
 import { approveUpdate, changeStage, deleteUpdate } from "@/lib/actions";
 import { LeadsQueue, MessagesInbox, Outbox } from "./Queues";
+import { useLiveRefresh, invalidate } from "@/lib/remote";
 import { cn, initials, relativeDay } from "@/lib/format";
 import type { StageKey } from "@/lib/types";
 import type { Notify } from "../PortalApp";
@@ -82,6 +84,33 @@ export default function Dashboard({ onSignOut, notify }: { onSignOut: () => void
     setMenuOpen(false);
     window.scrollTo({ top: 0 });
   };
+
+  // New leads, approvals and messages arrive while the panel is open, so the screens
+  // refetch by themselves every 30 seconds and whenever the tab regains focus.
+  useLiveRefresh(["/staff", "/admin"], 30000);
+  const [refreshing, setRefreshing] = useState(false);
+  const refreshNow = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      await invalidate("/staff", "/admin");
+    } finally {
+      // A spin that is over before it is seen reads as "nothing happened".
+      window.setTimeout(() => setRefreshing(false), 400);
+    }
+  };
+
+  const refreshButton = (
+    <button
+      onClick={() => void refreshNow()}
+      disabled={refreshing}
+      title="Check for new leads, approvals and messages"
+      className="inline-flex items-center gap-1.5 rounded-xl border border-line bg-white px-3 py-1.5 text-xs font-bold text-navy transition hover:border-navy-600 disabled:opacity-60"
+    >
+      <RefreshCw className={cn("size-3.5", refreshing && "animate-spin")} />
+      {refreshing ? "Refreshing…" : "Refresh"}
+    </button>
+  );
 
   const nav = (
     <nav className="flex flex-col gap-1">
@@ -138,6 +167,14 @@ export default function Dashboard({ onSignOut, notify }: { onSignOut: () => void
           <NavItem active={view === "users" && !selected} onClick={() => go("users")} icon={<UsersRound className="size-5" />}>
             Users & roles
           </NavItem>
+          {/* The dashboard is its own app on the same session — no second sign-in. */}
+          <Link
+            href="/analytics"
+            className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-white/65 transition hover:bg-white/5 hover:text-white focus-ring"
+          >
+            <BarChart3 className="size-5" /> Analytics
+            <ArrowUpRight className="ml-auto size-4 opacity-60" />
+          </Link>
         </>
       )}
       <Link href="/" target="_blank" className="mt-3 flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-white/65 transition hover:bg-white/5 hover:text-white">
@@ -210,6 +247,7 @@ export default function Dashboard({ onSignOut, notify }: { onSignOut: () => void
 
       <main className="lg:pl-64">
         <div className="mx-auto max-w-[1200px] px-4 py-6 sm:px-6 lg:py-8">
+          <div className="mb-3 flex justify-end">{refreshButton}</div>
           <AnimatePresence mode="wait">
             {selected && isTeam ? (
               <motion.div key={selected} initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} transition={{ duration: 0.25 }}>

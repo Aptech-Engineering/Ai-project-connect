@@ -140,6 +140,16 @@ export async function updateLead(id: number, patch: { status?: CourseLead["statu
   return lead;
 }
 
+/**
+ * Emails the person behind a course lead. The message is kept with the lead, and a
+ * lead that was still NEW becomes CONTACTED.
+ */
+export async function sendLeadMessage(id: number, subject: string, body: string) {
+  const lead = await api.post<CourseLead>(`${KEYS.leads}/${id}/messages`, { subject, body });
+  await refreshLeads();
+  return lead;
+}
+
 export interface ActivityFilters {
   q?: string;
   page?: number;

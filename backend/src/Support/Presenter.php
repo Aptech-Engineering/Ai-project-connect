@@ -332,7 +332,8 @@ final class Presenter
         return $data;
     }
 
-    public static function lead(array $l): array
+    /** @param list<array<string, mixed>> $messages follow-ups already sent to this lead */
+    public static function lead(array $l, array $messages = []): array
     {
         return [
             'id' => (int) $l['id'],
@@ -341,6 +342,9 @@ final class Presenter
             'projectTitle' => $l['project_title'] ?? 'Website visitor',
             'clientName' => $l['client_name'],
             'contact' => $l['contact'],
+            // Kept apart so a counsellor can mail or ring without retyping anything.
+            'email' => $l['email'] ?? null,
+            'phone' => $l['phone'] ?? null,
             'techId' => $l['technology_id'] ?? '',
             'courseId' => $l['course_id'] ?? '',
             'courseTitle' => $l['course_title'] ?? null,
@@ -349,6 +353,7 @@ final class Presenter
             'invitedBy' => $l['invited_by'] ?? null,
             'status' => $l['status'],
             'notes' => $l['notes'],
+            'messages' => $messages,
         ];
     }
 

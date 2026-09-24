@@ -128,6 +128,32 @@ export function invalidate(...prefixes: string[]) {
   return Promise.all(jobs).then(() => undefined);
 }
 
+/**
+ * Keeps screens current without anyone pressing reload: every `intervalMs` while the
+ * tab is visible, and again the moment it regains focus, the matching keys are marked
+ * stale so what is on screen refetches. A screen nobody is looking at costs nothing.
+ */
+export function useLiveRefresh(prefixes: string[], intervalMs = 30000) {
+  const keys = prefixes.join("|");
+  useEffect(() => {
+    const list = keys.split("|").filter(Boolean);
+    if (list.length === 0) return;
+    const tick = () => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      void invalidate(...list);
+    };
+    const id = window.setInterval(tick, intervalMs);
+    const onFocus = () => tick();
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onFocus);
+    return () => {
+      window.clearInterval(id);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onFocus);
+    };
+  }, [keys, intervalMs]);
+}
+
 /** Drops everything, e.g. when a session ends. */
 export function clearCache() {
   for (const [key, e] of entries) {
