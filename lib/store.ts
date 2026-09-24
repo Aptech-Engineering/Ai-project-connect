@@ -140,6 +140,21 @@ export async function updateLead(id: number, patch: { status?: CourseLead["statu
   return lead;
 }
 
+/** Admins can remove a lead entirely, along with the follow-ups sent on it. */
+export async function deleteLead(id: number) {
+  await api.del(`${KEYS.leads}/${id}`);
+  await refreshLeads();
+}
+
+/**
+ * Deletes a project and everything attached to it — updates, files, messages, the idea
+ * it came from and that idea's payments. `confirm` must be the project code.
+ */
+export async function deleteProject(code: string, confirm: string) {
+  await api.del(`/admin/projects/${encodeURIComponent(code)}`, { confirm });
+  await invalidate(KEYS.staffProjects, KEYS.dashboard, KEYS.ideas, KEYS.payments, KEYS.activity, KEYS.reports);
+}
+
 /**
  * Emails the person behind a course lead. The message is kept with the lead, and a
  * lead that was still NEW becomes CONTACTED.

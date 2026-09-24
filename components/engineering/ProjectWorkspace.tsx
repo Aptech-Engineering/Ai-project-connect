@@ -52,7 +52,7 @@ import {
   shareFile,
   updateMilestone,
 } from "@/lib/actions";
-import { useStaffProject } from "@/lib/store";
+import { deleteProject, useStaffProject } from "@/lib/store";
 import MessageThread from "../MessageThread";
 import { ChangeRequestsEditor, DigestPreviewButton, HandoverEditor } from "./ProjectExtras";
 import { MAX_PDF_BYTES, openRemoteFile } from "@/lib/files";
@@ -214,6 +214,8 @@ function Workspace({ project, onBack, onCodeChange, notify }: { project: Project
           <ActivityLog project={project} />
         </div>
       </div>
+      {me.role === "admin" && <DangerZone project={project} onBack={onBack} notify={notify} />}
+
       <p className="mt-5 text-center text-xs text-muted">
         {me.role === "admin"
           ? "As an admin you can change anything on this project."
@@ -1231,6 +1233,73 @@ function ActivityLog({ project }: { project: Project }) {
             ))}
           </AnimatePresence>
         </ol>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Deleting a project takes the whole history with it, so the admin types the code
+ * back before the button does anything.
+ */
+function DangerZone({ project, onBack, notify }: { project: Project; onBack: () => void; notify: Notify }) {
+  const [open, setOpen] = useState(false);
+  const [typed, setTyped] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const remove = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await deleteProject(project.code, typed.trim());
+      notify(`${project.title} and everything on it has been deleted.`);
+      onBack();
+    } catch (e) {
+      notify(errorMessage(e), "info");
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="mt-5 rounded-2xl border border-danger/20 bg-danger-soft/40 p-5">
+      <h2 className="font-display text-sm font-bold text-danger">Danger zone</h2>
+      {open ? (
+        <>
+          <p className="mt-1 text-sm text-navy">
+            This removes <span className="font-bold">{project.title}</span> and everything on it: updates, milestones, files, client
+            messages, change requests, the handover, the idea it came from and that idea&rsquo;s payments and receipts. It cannot be undone.
+          </p>
+          <label className="mt-3 block text-xs font-bold text-navy" htmlFor="confirm-delete-project">
+            Type <span className="font-mono">{project.code}</span> to confirm
+          </label>
+          <input
+            id="confirm-delete-project"
+            value={typed}
+            onChange={(e) => setTyped(e.target.value.toUpperCase())}
+            autoComplete="off"
+            className="mt-1 h-10 w-full max-w-xs rounded-lg border border-danger/30 px-3 font-mono text-sm outline-none focus:border-danger"
+          />
+          <div className="mt-3 flex gap-2">
+            <button
+              onClick={() => void remove()}
+              disabled={busy || typed.trim().toUpperCase() !== project.code.toUpperCase()}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-danger px-4 py-2 text-sm font-bold text-white disabled:opacity-40"
+            >
+              {busy ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
+              {busy ? "Deleting…" : "Delete this project"}
+            </button>
+            <button onClick={() => { setOpen(false); setTyped(""); }} className="rounded-lg border border-line bg-white px-4 py-2 text-sm font-bold text-navy">
+              Cancel
+            </button>
+          </div>
+        </>
+      ) : (
+        <div className="mt-1 flex flex-wrap items-center justify-between gap-3">
+          <p className="text-sm text-muted">Remove this project and its whole history from the platform.</p>
+          <button onClick={() => setOpen(true)} className="inline-flex items-center gap-1.5 rounded-lg border border-danger/30 bg-white px-3 py-1.5 text-xs font-bold text-danger hover:bg-danger-soft">
+            <Trash2 className="size-3.5" /> Delete project
+          </button>
+        </div>
       )}
     </div>
   );

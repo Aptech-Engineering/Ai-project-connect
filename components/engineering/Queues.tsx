@@ -2,11 +2,12 @@
 
 import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { AlertTriangle, BellRing, CheckCheck, GraduationCap, Loader2, Mail, MessageCircle, MessageSquareText, Phone, RotateCw, Send, Smartphone } from "lucide-react";
+import { AlertTriangle, BellRing, CheckCheck, GraduationCap, Loader2, Mail, MessageCircle, MessageSquareText, Phone, RotateCw, Send, Smartphone, Trash2 } from "lucide-react";
 import { useCatalog } from "@/lib/catalog";
 import { errorMessage } from "@/lib/api";
 import { postTeamReply } from "@/lib/actions";
-import { refreshLeads, refreshNotifications, refreshProjects, sendLeadMessage, updateLead, useLeads, useMessageThreads, useNotifications, type MessageThread } from "@/lib/store";
+import { deleteLead, refreshLeads, refreshNotifications, refreshProjects, sendLeadMessage, updateLead, useLeads, useMessageThreads, useNotifications, type MessageThread } from "@/lib/store";
+import { useStaff } from "@/lib/staff";
 import { cn, relativeDay } from "@/lib/format";
 import type { CourseLead, LeadStatus, Notice } from "@/lib/types";
 import type { Notify } from "../PortalApp";
@@ -201,9 +202,23 @@ function LeadRow({ lead, notify }: { lead: CourseLead; notify: Notify }) {
   const email = (lead.email ?? (lead.contact?.includes("@") ? lead.contact.split("·")[0].trim() : "")) || "";
   const phone = (lead.phone ?? (lead.contact && !lead.contact.includes("@") ? lead.contact : "")) || "";
   const sentMessages = lead.messages ?? [];
+  const me = useStaff();
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [composing, setComposing] = useState(false);
   const [subject, setSubject] = useState(`About ${course?.title ?? "your course enquiry"}`);
   const [body, setBody] = useState("");
+
+  const removeLead = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await deleteLead(Number(lead.id));
+      notify(`${lead.clientName} removed from course leads.`, "info");
+    } catch (e) {
+      notify(errorMessage(e), "info");
+      setBusy(false);
+    }
+  };
 
   const sendEmail = async () => {
     if (busy) return;
@@ -381,6 +396,33 @@ function LeadRow({ lead, notify }: { lead: CourseLead; notify: Notify }) {
               {LEAD_STATUSES[s].label}
             </button>
           ))}
+          {me.role === "admin" &&
+            (confirmDelete ? (
+              <div className="rounded-lg border border-danger/30 bg-danger-soft p-2 text-center">
+                <p className="text-[11px] font-bold text-danger">Delete this lead for good?</p>
+                <div className="mt-1.5 flex gap-1.5">
+                  <button
+                    onClick={() => void removeLead()}
+                    disabled={busy}
+                    aria-label={`Delete the lead from ${lead.clientName} permanently`}
+                    className="flex-1 rounded-md bg-danger px-2 py-1 text-[11px] font-bold text-white disabled:opacity-50"
+                  >
+                    Delete
+                  </button>
+                  <button onClick={() => setConfirmDelete(false)} className="flex-1 rounded-md border border-line bg-white px-2 py-1 text-[11px] font-bold text-navy">
+                    Keep
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                onClick={() => setConfirmDelete(true)}
+                disabled={busy}
+                className="inline-flex items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold text-muted transition hover:bg-danger-soft hover:text-danger disabled:opacity-40"
+              >
+                <Trash2 className="size-3.5" /> Delete
+              </button>
+            ))}
         </div>
       </div>
     </motion.li>

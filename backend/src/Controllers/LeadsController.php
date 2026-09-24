@@ -135,6 +135,19 @@ final class LeadsController
         Response::json(self::present((int) $lead['id']), 201);
     }
 
+    /** An admin removes a lead entirely — the follow-ups sent on it go with it. */
+    public static function destroy(Request $r): void
+    {
+        $admin = Auth::requireStaff(['admin']);
+        $lead = Database::one('SELECT * FROM leads WHERE id = ?', [(int) $r->params['id']]);
+        if ($lead === null) {
+            throw HttpError::notFound('Lead not found.');
+        }
+        Database::run('DELETE FROM leads WHERE id = ?', [(int) $lead['id']]);
+        Activity::staff($admin, "Deleted course lead #{$lead['id']} ({$lead['client_name']})");
+        Response::noContent();
+    }
+
     private static function present(int $id): array
     {
         return Presenter::lead(Database::one(self::SELECT . ' WHERE l.id = ?', [$id]), self::messagesFor([$id])[$id] ?? []);

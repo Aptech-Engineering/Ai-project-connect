@@ -132,6 +132,7 @@ return static function (Router $r): void {
     $r->get('/api/staff/leads', [Leads::class, 'index']);
     $r->patch('/api/staff/leads/{id}', [Leads::class, 'update']);
     $r->post('/api/staff/leads/{id}/messages', [Leads::class, 'sendMessage']);
+    $r->delete('/api/staff/leads/{id}', [Leads::class, 'destroy']);
 
     /* ---------- analytics (spec section 9) ---------- */
     $r->post('/api/track', [Track::class, 'ingest']);
@@ -170,6 +171,7 @@ return static function (Router $r): void {
     $r->post('/api/admin/technologies', [Admin::class, 'createTechnology']);
     $r->patch('/api/admin/technologies/{id}', [Admin::class, 'updateTechnology']);
     $r->delete('/api/admin/technologies/{id}', [Admin::class, 'deleteTechnology']);
+    $r->delete('/api/admin/projects/{code}', [Admin::class, 'deleteProject']);
     $r->get('/api/admin/users', [Admin::class, 'users']);
     $r->post('/api/admin/users', [Admin::class, 'createUser']);
     $r->patch('/api/admin/users/{id}', [Admin::class, 'updateUser']);

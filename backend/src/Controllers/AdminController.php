@@ -248,6 +248,64 @@ final class AdminController
 
     /* ---------------- users & roles ---------------- */
 
+    /**
+     * Deletes a project and everything that belongs to it: updates, milestones, files,
+     * messages, change requests, handover, the idea it came from and that idea's
+     * payments, quotes and receipts, plus its course leads and notifications.
+     *
+     * Nothing here can be undone, so the caller must type the project code back.
+     * Paystack keeps its own record of any charge; this only clears ours.
+     */
+    public static function deleteProject(Request $r): void
+    {
+        $admin = Auth::requireStaff(['admin']);
+        $code = strtoupper(trim((string) $r->params['code']));
+        $project = Database::one('SELECT * FROM projects WHERE code = ?', [$code]);
+        if ($project === null) {
+            throw HttpError::notFound('Project not found.');
+        }
+        $data = Validator::validate($r->input(), ['confirm' => 'required|string|max:60']);
+        if (strtoupper(trim($data['confirm'])) !== $code) {
+            throw HttpError::validation(['confirm' => "Type the project code ({$code}) exactly to delete it."]);
+        }
+
+        $id = (int) $project['id'];
+        $files = Database::all(
+            'SELECT f.id FROM project_files pf JOIN files f ON f.id = pf.file_id WHERE pf.project_id = ?',
+            [$id],
+        );
+        $money = Database::one(
+            'SELECT COUNT(*) AS payments, COALESCE(SUM(amount_kobo), 0) AS kobo FROM idea_payments
+             WHERE idea_id IN (SELECT id FROM ideas WHERE project_id = ?)',
+            [$id],
+        );
+
+        Database::transaction(static function () use ($id): void {
+            // The idea takes its payments, quotes and resume links with it (ON DELETE CASCADE),
+            // and the project takes updates, milestones, files, messages, approvals,
+            // change requests, handover and stage history.
+            Database::run('DELETE FROM ideas WHERE project_id = ?', [$id]);
+            Database::run('DELETE FROM leads WHERE project_id = ?', [$id]);
+            Database::run('DELETE FROM notifications WHERE project_id = ?', [$id]);
+            Database::run('DELETE FROM course_events WHERE project_id = ?', [$id]);
+            Database::run('DELETE FROM projects WHERE id = ?', [$id]);
+        });
+        foreach ($files as $file) {
+            Uploads::delete((int) $file['id']);
+        }
+
+        // project_id stays null: the log entry must outlive the project it describes.
+        Activity::staff($admin, sprintf(
+            'Deleted project %s (%s) and everything on it: %d file(s), %d payment(s) totalling NGN %s',
+            $code,
+            $project['title'],
+            count($files),
+            (int) $money['payments'],
+            number_format(((int) $money['kobo']) / 100, 2),
+        ));
+        Response::noContent();
+    }
+
     public static function users(Request $r): void
     {
         Auth::requireStaff(['admin']);
