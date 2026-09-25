@@ -17,6 +17,8 @@ use App\Controllers\ClientController as Client;
 use App\Controllers\IdeasController as Ideas;
 use App\Controllers\LeadsController as Leads;
 use App\Controllers\PublicController as Pub;
+use App\Controllers\ScholarshipAdminController as ScholarshipAdmin;
+use App\Controllers\ScholarshipController as Scholarship;
 use App\Controllers\StaffAuthController as StaffAuth;
 use App\Controllers\StaffController as Staff;
 use App\Core\Router;
@@ -31,6 +33,14 @@ return static function (Router $r): void {
     $r->post('/api/ideas', [Apply::class, 'createComplete']);
     $r->get('/api/ideas/{ref}', [Pub::class, 'ideaStatus']);
     $r->post('/api/course-enquiries', [Pub::class, 'courseEnquiry']);
+
+    /* ---------- scholarship programme (/scholarship) ---------- */
+    $r->get('/api/scholarship', [Scholarship::class, 'show']);
+    $r->post('/api/scholarship/apply', [Scholarship::class, 'apply']);
+    $r->post('/api/scholarship/pay/paystack', [Scholarship::class, 'payWithPaystack']);
+    $r->post('/api/scholarship/pay/manual', [Scholarship::class, 'claimTransfer']);
+    $r->get('/api/scholarship/status', [Scholarship::class, 'status']);
+    $r->get('/api/scholarship/form', [Scholarship::class, 'form']);
     $r->post('/api/course-events', [Reports::class, 'trackCourseEvent']);
     $r->get('/api/quotes/{ref}', [Quotes::class, 'show']);
     $r->get('/api/quotes/{ref}/proposal', [Quotes::class, 'proposal']);
@@ -171,6 +181,14 @@ return static function (Router $r): void {
     $r->post('/api/admin/technologies', [Admin::class, 'createTechnology']);
     $r->patch('/api/admin/technologies/{id}', [Admin::class, 'updateTechnology']);
     $r->delete('/api/admin/technologies/{id}', [Admin::class, 'deleteTechnology']);
+    $r->get('/api/staff/scholarship', [ScholarshipAdmin::class, 'index']);
+    $r->put('/api/staff/scholarship', [ScholarshipAdmin::class, 'update']);
+    $r->post('/api/staff/scholarship/form', [ScholarshipAdmin::class, 'uploadForm']);
+    $r->post('/api/staff/scholarship/batches', [ScholarshipAdmin::class, 'createBatch']);
+    $r->patch('/api/staff/scholarship/batches/{id}', [ScholarshipAdmin::class, 'updateBatch']);
+    $r->delete('/api/staff/scholarship/batches/{id}', [ScholarshipAdmin::class, 'deleteBatch']);
+    $r->patch('/api/staff/scholarship/applicants/{id}', [ScholarshipAdmin::class, 'updateApplicant']);
+    $r->delete('/api/staff/scholarship/applicants/{id}', [ScholarshipAdmin::class, 'deleteApplicant']);
     $r->delete('/api/admin/projects/{code}', [Admin::class, 'deleteProject']);
     $r->get('/api/admin/users', [Admin::class, 'users']);
     $r->post('/api/admin/users', [Admin::class, 'createUser']);

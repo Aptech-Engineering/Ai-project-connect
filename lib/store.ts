@@ -36,6 +36,8 @@ export interface DashboardSummary {
   staleProjects: { code: string; title: string; daysSinceClientUpdate: number }[];
   newIdeas: number;
   newLeads: number;
+  /** Scholarship transfers to confirm, plus paid applicants with no exam batch yet. */
+  scholarshipTasks?: number;
   /** Admins only. */
   paymentsToConfirm?: number;
   refundsPending?: number;

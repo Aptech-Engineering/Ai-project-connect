@@ -5,6 +5,9 @@ Options -Indexes
 <IfModule mod_rewrite.c>
     RewriteEngine On
 
+    # Both spellings reach the programme page.
+    RewriteRule ^scholarships/?$ /scholarship/ [R=301,L,NC]
+
     # /kadunacentre is a shortcut to the Aptech Kaduna site. Server-side so it works
     # with JavaScript off, before any of the rules below can claim the path.
     RewriteRule ^kadunacentre/?$ https://aptechwebsite.vercel.app/ [R=302,L,NC]

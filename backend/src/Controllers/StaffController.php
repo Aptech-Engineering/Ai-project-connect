@@ -56,6 +56,10 @@ final class StaffController
         }
         if (in_array($user['role'], ['admin', 'counsellor'], true)) {
             $data['newLeads'] = (int) Database::value("SELECT COUNT(*) FROM leads WHERE status = 'NEW'");
+            // Scholarship: transfers to confirm, plus paid applicants with no exam batch yet.
+            $data['scholarshipTasks'] = (int) Database::value(
+                "SELECT COUNT(*) FROM scholarship_applicants WHERE status = 'AWAITING_CONFIRMATION' OR (status = 'PAID' AND batch_id IS NULL)",
+            );
         }
         Response::json($data);
     }

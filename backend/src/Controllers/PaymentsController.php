@@ -16,6 +16,7 @@ use App\Core\Validator;
 use App\Support\Ideas;
 use App\Support\Links;
 use App\Support\Paystack;
+use App\Support\ScholarshipPayments;
 use App\Support\Presenter;
 use App\Support\Wallet;
 
@@ -34,6 +35,16 @@ final class PaymentsController
             RateLimiter::hit('pay-callback:' . $r->ip(), 30, 900);
             if ($reference !== '' && strlen($reference) <= 64) {
                 $payment = Database::one("SELECT * FROM idea_payments WHERE reference = ? AND method = 'paystack'", [$reference]);
+            }
+            if ($payment === null && $reference !== '') {
+                // Not a commitment fee: the scholarship form fee has its own table and
+                // sends the payer back to the scholarship status page.
+                $applicant = Database::one("SELECT * FROM scholarship_applicants WHERE reference = ? AND method = 'paystack'", [$reference]);
+                if ($applicant !== null) {
+                    $result = ScholarshipPayments::verify($applicant);
+                    Response::redirect(ScholarshipPayments::returnLink($applicant, $result));
+                    return;
+                }
             }
             if ($payment !== null) {
                 $outcome = self::verifyPaystack($payment);
@@ -63,8 +74,21 @@ final class PaymentsController
 
         switch ($event['event']) {
             case 'charge.success':
-                $payment = Database::one("SELECT * FROM idea_payments WHERE reference = ? AND method = 'paystack'", [(string) ($data['reference'] ?? '')]);
+                $reference = (string) ($data['reference'] ?? '');
+                $payment = Database::one("SELECT * FROM idea_payments WHERE reference = ? AND method = 'paystack'", [$reference]);
                 if ($payment === null) {
+                    // The scholarship form fee runs on the same Paystack account.
+                    $applicant = $reference === '' ? null : Database::one("SELECT * FROM scholarship_applicants WHERE reference = ? AND method = 'paystack'", [$reference]);
+                    if ($applicant !== null && $applicant['status'] !== 'PAID') {
+                        if ((int) ($data['amount'] ?? -1) !== (int) $applicant['amount_kobo'] || strtoupper((string) ($data['currency'] ?? '')) !== strtoupper((string) $applicant['currency'])) {
+                            Activity::system("Paystack reported an amount that doesn't match the scholarship fee for {$reference}. Not marked as paid.");
+                            break;
+                        }
+                        ScholarshipPayments::markPaid($applicant, [
+                            'id' => isset($data['id']) ? (int) $data['id'] : null,
+                            'channel' => $data['channel'] ?? null,
+                        ]);
+                    }
                     break; // not one of ours (e.g. another product on the same Paystack account)
                 }
                 if ((int) ($data['amount'] ?? -1) !== (int) $payment['amount_kobo'] || strtoupper((string) ($data['currency'] ?? '')) !== $payment['currency']) {
