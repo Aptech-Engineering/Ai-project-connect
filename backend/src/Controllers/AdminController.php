@@ -52,7 +52,8 @@ final class AdminController
     /** Uploads a public image (fliers, course fliers). Returns the id to store in content or a course. */
     public static function uploadImage(Request $r): void
     {
-        $user = Auth::requireStaff(['admin']);
+        // Counsellors own the course catalogue, and a course has a flier.
+        $user = Auth::requireStaff(self::CATALOGUE_ROLES);
         $upload = $r->file('file');
         if ($upload === null) {
             throw HttpError::validation(['file' => 'Choose an image to upload.']);
@@ -61,18 +62,21 @@ final class AdminController
         Response::json(['id' => $stored['publicId'], 'url' => Presenter::publicFileUrl($stored['publicId']), 'name' => $stored['name'], 'size' => $stored['size']], 201);
     }
 
+    /** Who may edit the course catalogue: admins, and the counsellors who sell it. */
+    private const CATALOGUE_ROLES = ['admin', 'counsellor'];
+
     /* ---------------- courses ---------------- */
 
     public static function courses(Request $r): void
     {
-        Auth::requireStaff(['admin']);
+        Auth::requireStaff(self::CATALOGUE_ROLES);
         $rows = Database::all('SELECT c.*, f.public_id AS flier_public_id FROM courses c LEFT JOIN files f ON f.id = c.flier_file_id ORDER BY c.sort_order, c.title');
         Response::json(array_map([Presenter::class, 'course'], $rows));
     }
 
     public static function createCourse(Request $r): void
     {
-        $user = Auth::requireStaff(['admin']);
+        $user = Auth::requireStaff(self::CATALOGUE_ROLES);
         $data = self::validateCourse($r->input(), true);
         $id = Codes::slug($data['id'] ?? $data['title']);
         $base = $id;
@@ -86,7 +90,7 @@ final class AdminController
 
     public static function updateCourse(Request $r): void
     {
-        $user = Auth::requireStaff(['admin']);
+        $user = Auth::requireStaff(self::CATALOGUE_ROLES);
         $id = $r->params['id'];
         if (!Database::value('SELECT 1 FROM courses WHERE id = ?', [$id])) {
             throw HttpError::notFound('Course not found.');
@@ -99,7 +103,7 @@ final class AdminController
 
     public static function deleteCourse(Request $r): void
     {
-        $user = Auth::requireStaff(['admin']);
+        $user = Auth::requireStaff(self::CATALOGUE_ROLES);
         $course = Database::one('SELECT id, title FROM courses WHERE id = ?', [$r->params['id']]);
         if ($course === null) {
             throw HttpError::notFound('Course not found.');

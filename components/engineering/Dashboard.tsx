@@ -12,6 +12,7 @@ import {
   FolderKanban,
   Inbox,
   BarChart3,
+  BookOpen,
   RefreshCw,
   History,
   UserPlus,
@@ -53,10 +54,11 @@ import PaymentsView from "./PaymentsView";
 import SettingsScreen from "./SettingsScreen";
 import { SlidersHorizontal } from "lucide-react";
 import { Wallet as WalletIcon } from "lucide-react";
+import { CoursesEditor } from "./cms/CatalogEditors";
 import { ROLES, useStaff } from "@/lib/staff";
 import ContentManager from "./cms/ContentManager";
 
-type View = "projects" | "approvals" | "ideas" | "messages" | "leads" | "outbox" | "website" | "users" | "reports" | "activity" | "payments" | "settings";
+type View = "projects" | "approvals" | "ideas" | "messages" | "leads" | "courses" | "outbox" | "website" | "users" | "reports" | "activity" | "payments" | "settings";
 
 const BOARD: StageKey[] = ["UNDER_REVIEW", "DESIGN", "DEVELOPMENT", "TESTING", "DEPLOYMENT", "DELIVERED", "ON_HOLD"];
 
@@ -141,6 +143,11 @@ export default function Dashboard({ onSignOut, notify }: { onSignOut: () => void
         Course leads
         {(summary?.newLeads ?? 0) > 0 && <span className="ml-auto rounded-full bg-teal px-2 py-0.5 text-xs font-bold text-white">{summary?.newLeads} new</span>}
       </NavItem>
+      )}
+      {(me.role === "admin" || me.role === "counsellor") && (
+        <NavItem active={view === "courses" && !selected} onClick={() => go("courses")} icon={<BookOpen className="size-5" />}>
+          Courses & pricing
+        </NavItem>
       )}
       {me.role === "admin" && (
         <>
@@ -287,6 +294,16 @@ export default function Dashboard({ onSignOut, notify }: { onSignOut: () => void
             ) : view === "leads" && (me.role === "admin" || me.role === "counsellor") ? (
               <motion.div key="leads" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
                 <LeadsQueue notify={notify} />
+              </motion.div>
+            ) : view === "courses" && (me.role === "admin" || me.role === "counsellor") ? (
+              <motion.div key="courses" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+                <div className="mb-5">
+                  <h1 className="font-display text-2xl font-bold">Courses &amp; pricing</h1>
+                  <p className="text-sm text-muted">
+                    What the website shows under &ldquo;Learn the stack&rdquo;: titles, prices, discounts, fliers and start dates. Changes go live straight away.
+                  </p>
+                </div>
+                <CoursesEditor notify={notify} />
               </motion.div>
             ) : !isTeam ? null : view === "website" && me.role === "admin" ? (
               <motion.div key="website" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
