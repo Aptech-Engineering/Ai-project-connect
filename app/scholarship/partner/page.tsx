@@ -4,7 +4,7 @@ import { PartnerPage } from "@/components/scholarship/PartnerPage";
 export const metadata: Metadata = {
   title: "Scholarship Programme — in partnership with AI Project Connect",
   description:
-    "A co-branded scholarship page: short-term tech courses 100% tuition free with APTECH Computer Education and AI Projects LTD, run with our partner organisation.",
+    "A co-branded scholarship page: short-term tech courses 100% tuition free with APTECH Computer Education India and AI Projects LTD, run with our partner organisation.",
 };
 
 /**

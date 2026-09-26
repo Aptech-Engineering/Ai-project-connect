@@ -253,7 +253,7 @@ export function PartnerPage() {
           </article>
           <article className="rounded-2xl border border-line bg-white p-5 shadow-sm">
             <AptechMark height="h-11" className="mb-3 px-0" />
-            <h3 className="font-display font-bold text-navy">APTECH Computer Education</h3>
+            <h3 className="font-display font-bold text-navy">APTECH Computer Education India</h3>
             <p className="mt-1 text-sm text-muted">
               {p.aptechWhy || "A global IT training institution with over 30 years of skill-based education across 40+ countries."}
             </p>
@@ -310,7 +310,7 @@ export function PartnerPage() {
             </p>
           </div>
           <p className="border-t border-white/10 pt-4 text-xs text-white/45 sm:col-span-2">
-            © {new Date().getFullYear()} {p.name} · APTECH Computer Education · AI Projects LTD. Applications, payments and exam results are handled by AI
+            © {new Date().getFullYear()} {p.name} · APTECH Computer Education India · AI Projects LTD. Applications, payments and exam results are handled by AI
             Project Connect.
           </p>
         </div>

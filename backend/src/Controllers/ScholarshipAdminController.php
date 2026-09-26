@@ -537,7 +537,7 @@ final class ScholarshipAdminController
                 ['title' => 'How to enrol', 'description' => 'Register, pay the scholarship form fee, then sit the entrance assessment at the centre. Your form and exam date are issued once the fee is confirmed.'],
             ],
             'partnerWhy' => '',
-            'aptechWhy' => 'APTECH Computer Education is a global IT training institution with over 30 years of skill-based education across 40+ countries.',
+            'aptechWhy' => 'APTECH Computer Education India is a global IT training institution with over 30 years of skill-based education across 40+ countries.',
             'apcWhy' => 'AI Projects LTD runs the application, payment and exam scheduling for the programme through AI Project Connect.',
         ];
     }
