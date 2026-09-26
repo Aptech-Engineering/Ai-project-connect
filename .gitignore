@@ -7,3 +7,6 @@ next-env.d.ts
 # local env
 .env.local
 .env*.local
+
+# Built partner pages: generated from partner-kit/partners/*.json
+partner-kit/out/

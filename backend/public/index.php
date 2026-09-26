@@ -46,6 +46,20 @@ try {
     $origin = $request->header('Origin');
     $allowedOrigins = (array) Config::get('cors.allowed_origins', []);
     $sameOrigin = $origin !== null && parse_url($origin, PHP_URL_HOST) === ($_SERVER['HTTP_HOST'] ?? '') ;
+    // The scholarship page is public marketing data, and partner sites host their own
+    // landing page on their own domain: let anyone READ it (no cookies, GET only).
+    $publicRead = $request->path === '/api/scholarship' && in_array($request->method, ['GET', 'OPTIONS'], true);
+    if ($publicRead && $origin !== null) {
+        header('Access-Control-Allow-Origin: *');
+        header('Vary: Origin');
+        if ($request->method === 'OPTIONS') {
+            header('Access-Control-Allow-Methods: GET');
+            header('Access-Control-Allow-Headers: Content-Type');
+            header('Access-Control-Max-Age: 600');
+            http_response_code(204);
+            exit;
+        }
+    }
     if ($origin !== null && in_array($origin, $allowedOrigins, true)) {
         header('Access-Control-Allow-Origin: ' . $origin);
         header('Access-Control-Allow-Credentials: true');

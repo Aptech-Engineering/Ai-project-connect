@@ -1,0 +1,50 @@
+{
+  "_howToUse": "Copy this file to partners/<partner>.json, fill it in, drop their logo in assets/, then run: node make-partner-page.mjs partners/<partner>.json",
+
+  "slug": "partner-slug",
+  "name": "PARTNER NAME",
+  "fullName": "Partner's full registered name",
+  "logo": "assets/partner-logo.png",
+  "accent": "#0a7a3c",
+  "site": "partner.org",
+  "email": "info@partner.org",
+  "phone": "0803 000 0000",
+
+  "programmeTitle": "Nigeria Independence Scholarship Programme",
+  "tagline": "One line about what the programme gives people",
+  "intro": "Two or three sentences: who the partner is, who they are working with, and what the scholarship does.",
+
+  "objectives": [
+    { "title": "Digital skill empowerment", "description": "What this objective means in one sentence." },
+    { "title": "Career acceleration", "description": "What this objective means in one sentence." },
+    { "title": "Higher education pathways", "description": "What this objective means in one sentence." },
+    { "title": "Socio-economic growth", "description": "What this objective means in one sentence." }
+  ],
+
+  "tracks": [
+    { "track": "Office Automation", "focus": "MS Office suite, document management, productivity tools", "target": "Workplace administrative efficiency" },
+    { "track": "Data Analysis", "focus": "Excel analytics, data visualisation, BI fundamentals", "target": "Business intelligence and decision support" },
+    { "track": "Cybersecurity", "focus": "Network fundamentals, threat defence, security principles", "target": "Essential system protection" },
+    { "track": "Programming with Python", "focus": "Core logic, data structures, automation and scripting", "target": "Software logic and scripting competency" },
+    { "track": "Web Development", "focus": "HTML5, CSS3, JavaScript, responsive layouts", "target": "Modern web design and front-end development" }
+  ],
+  "tracksNote": "Additional specialised tracks including Database Administration, Graphic Design and Networking are also accessible under the programme.",
+
+  "pathwaySteps": ["Short-term course", "Foundation certificate", "Advanced Diploma (ADSE)", "HND / B.Sc. credit transfer"],
+  "pathwayIntro": "Beyond the short-term course, this scholarship creates a direct progression toward advanced professional qualifications and tertiary degrees through Aptech's international credit transfer framework.",
+  "pathwayDetails": [
+    { "title": "Short-term skill acquisition", "description": "Candidates who complete the introductory modules qualify for merit evaluation into advanced specialisation tracks." },
+    { "title": "Advanced Diploma in Software Engineering (ADSE)", "description": "Top performers receive eligibility for full or partial scholarship slots into Aptech's flagship multi-semester ADSE programme." },
+    { "title": "Credit transfer for HND / B.Sc.", "description": "ADSE graduates can use Aptech's credit transfer tie-ups with overseas partner universities to complete a B.Sc. or HND in reduced time and cost." }
+  ],
+
+  "eligibility": [
+    { "title": "Who can apply?", "description": "Open to Nigerian citizens, students, secondary school graduates, job seekers and working professionals seeking modern IT competencies." },
+    { "title": "Application requirements", "description": "A basic interest in technology. Candidates complete the online registration and select their preferred accredited Aptech centre." },
+    { "title": "How to enrol", "description": "Register online, pay the scholarship form fee, then sit the entrance assessment at your centre. Your form and exam date are issued once the fee is confirmed." }
+  ],
+
+  "partnerWhy": "One paragraph about the partner and why they are part of this.",
+  "aptechWhy": "Aptech Computer Education is a premier global IT training institution with over 30 years of excellence in skill-based education across 40+ countries.",
+  "apcWhy": "AI Projects LTD runs the application, payment and exam scheduling for the programme through AI Project Connect."
+}
