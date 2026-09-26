@@ -12,6 +12,10 @@ Options -Indexes
     # with JavaScript off, before any of the rules below can claim the path.
     RewriteRule ^kadunacentre/?$ https://aptechwebsite.vercel.app/ [R=302,L,NC]
 
+    # Every partner shares one exported page; the slug is read from the path.
+    # /scholarship/partner/ghessa -> scholarship/partner/index.html
+    RewriteRule ^scholarship/partner/([a-z0-9-]+)/?$ /scholarship/partner/index.html [L,NC]
+
     # Leave the API alone: public_html/api has its own rules.
     RewriteRule ^api(/|$) - [L]
 

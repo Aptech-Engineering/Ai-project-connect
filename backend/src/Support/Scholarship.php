@@ -81,6 +81,77 @@ final class Scholarship
         ];
     }
 
+    /* ---------------- partners ---------------- */
+
+    /** Everything a partner landing page needs, or null when there is no such partner. */
+    public static function partnerBySlug(string $slug): ?array
+    {
+        $row = Database::one(
+            'SELECT p.*, f.public_id AS logo_public_id FROM scholarship_partners p
+             LEFT JOIN files f ON f.id = p.logo_file_id
+             WHERE p.slug = ? AND p.active = 1',
+            [strtolower(trim($slug))],
+        );
+        return $row ?: null;
+    }
+
+    /** The partner's own wording, falling back to the programme's where it is empty. */
+    public static function presentPartner(array $partner, array $programme): array
+    {
+        $content = json_decode((string) ($partner['content'] ?? ''), true);
+        $content = is_array($content) ? $content : [];
+        $list = static fn (string $key) => array_values(array_filter((array) ($content[$key] ?? []), 'is_array'));
+
+        return [
+            'slug' => $partner['slug'],
+            'name' => $partner['name'],
+            'fullName' => $partner['full_name'] ?: $partner['name'],
+            'logo' => $partner['logo_public_id'] ? Presenter::publicFileUrl($partner['logo_public_id']) : null,
+            'accent' => $partner['accent'],
+            'website' => $partner['website'],
+            'email' => $partner['email'],
+            'phone' => $partner['phone'],
+            'programmeTitle' => $partner['programme_title'] ?: $programme['title'],
+            'tagline' => $partner['tagline'] ?: $programme['tagline'],
+            'intro' => $partner['intro'] ?: $programme['intro'],
+            'objectives' => $list('objectives'),
+            'tracks' => $list('tracks'),
+            'tracksNote' => (string) ($content['tracksNote'] ?? ''),
+            'pathwaySteps' => array_values(array_filter((array) ($content['pathwaySteps'] ?? []), 'is_string')),
+            'pathwayIntro' => (string) ($content['pathwayIntro'] ?? ''),
+            'pathwayDetails' => $list('pathwayDetails'),
+            'eligibility' => $list('eligibility'),
+            'partnerWhy' => (string) ($content['partnerWhy'] ?? ''),
+            'aptechWhy' => (string) ($content['aptechWhy'] ?? ''),
+            'apcWhy' => (string) ($content['apcWhy'] ?? ''),
+        ];
+    }
+
+    /** The same partner as staff see them, with the link to share. */
+    public static function presentPartnerForStaff(array $p, int $applicants = 0): array
+    {
+        $content = json_decode((string) ($p['content'] ?? ''), true);
+        return [
+            'id' => (int) $p['id'],
+            'slug' => $p['slug'],
+            'name' => $p['name'],
+            'fullName' => $p['full_name'],
+            'logo' => !empty($p['logo_public_id']) ? Presenter::publicFileUrl($p['logo_public_id']) : null,
+            'accent' => $p['accent'],
+            'website' => $p['website'],
+            'email' => $p['email'],
+            'phone' => $p['phone'],
+            'programmeTitle' => $p['programme_title'],
+            'tagline' => $p['tagline'],
+            'intro' => $p['intro'],
+            'content' => is_array($content) ? $content : new \stdClass(),
+            'active' => (bool) $p['active'],
+            'url' => Links::page('scholarship/partner/' . $p['slug']),
+            'views' => (int) $p['views'],
+            'applicants' => $applicants,
+        ];
+    }
+
     /** @return list<array<string, mixed>> */
     public static function batches(bool $activeOnly = false): array
     {

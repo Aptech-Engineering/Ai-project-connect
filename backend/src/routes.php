@@ -39,6 +39,7 @@ return static function (Router $r): void {
     $r->post('/api/scholarship/apply', [Scholarship::class, 'apply']);
     $r->post('/api/scholarship/pay/paystack', [Scholarship::class, 'payWithPaystack']);
     $r->post('/api/scholarship/pay/manual', [Scholarship::class, 'claimTransfer']);
+    $r->get('/api/scholarship/partners/{slug}', [Scholarship::class, 'partner']);
     $r->get('/api/scholarship/status', [Scholarship::class, 'status']);
     $r->get('/api/scholarship/form', [Scholarship::class, 'form']);
     $r->post('/api/course-events', [Reports::class, 'trackCourseEvent']);
@@ -187,6 +188,10 @@ return static function (Router $r): void {
     $r->post('/api/staff/scholarship/batches', [ScholarshipAdmin::class, 'createBatch']);
     $r->patch('/api/staff/scholarship/batches/{id}', [ScholarshipAdmin::class, 'updateBatch']);
     $r->delete('/api/staff/scholarship/batches/{id}', [ScholarshipAdmin::class, 'deleteBatch']);
+    $r->post('/api/staff/scholarship/partners', [ScholarshipAdmin::class, 'createPartner']);
+    $r->patch('/api/staff/scholarship/partners/{id}', [ScholarshipAdmin::class, 'updatePartner']);
+    $r->post('/api/staff/scholarship/partners/{id}/logo', [ScholarshipAdmin::class, 'uploadPartnerLogo']);
+    $r->delete('/api/staff/scholarship/partners/{id}', [ScholarshipAdmin::class, 'deletePartner']);
     $r->patch('/api/staff/scholarship/applicants/{id}', [ScholarshipAdmin::class, 'updateApplicant']);
     $r->delete('/api/staff/scholarship/applicants/{id}', [ScholarshipAdmin::class, 'deleteApplicant']);
     $r->delete('/api/admin/projects/{code}', [Admin::class, 'deleteProject']);

@@ -31,6 +31,22 @@ final class ScholarshipController
         Response::json(Scholarship::publicProgramme());
     }
 
+    /** One partner's landing page: their branding and wording, plus the live programme. */
+    public static function partner(Request $r): void
+    {
+        $slug = (string) ($r->params['slug'] ?? '');
+        $partner = Scholarship::partnerBySlug($slug);
+        if ($partner === null) {
+            throw HttpError::notFound('We could not find that partner page.');
+        }
+        // A cheap read counter, so staff can see which partner page gets opened.
+        Database::run('UPDATE scholarship_partners SET views = views + 1 WHERE id = ?', [(int) $partner['id']]);
+        Response::json([
+            'partner' => Scholarship::presentPartner($partner, Scholarship::programme()),
+            'programme' => Scholarship::publicProgramme(),
+        ]);
+    }
+
     /** Register: name, email, phone, address, state, nationality and a course. */
     public static function apply(Request $r): void
     {
@@ -48,7 +64,14 @@ final class ScholarshipController
             'state' => 'required|string|min:2|max:80',
             'nationality' => 'required|string|min:2|max:80',
             'course' => 'nullable|string|max:120',
+            // Set when they arrived from a partner's landing page.
+            'partner' => 'nullable|string|max:60',
         ]);
+        $partnerSlug = null;
+        if (!empty($data['partner'])) {
+            $slug = strtolower(trim($data['partner']));
+            $partnerSlug = Database::value('SELECT slug FROM scholarship_partners WHERE slug = ?', [$slug]) ?: null;
+        }
 
         $email = strtolower(trim($data['email']));
         // One unpaid application per email: a second attempt continues the first,
@@ -76,6 +99,7 @@ final class ScholarshipController
             'state' => $data['state'],
             'nationality' => $data['nationality'],
             'course' => $data['course'] ?? null,
+            'partner_slug' => $partnerSlug,
             'amount_kobo' => (int) $programme['fee_kobo'],
             'currency' => $programme['currency'],
         ]);

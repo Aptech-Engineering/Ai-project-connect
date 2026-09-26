@@ -32,7 +32,10 @@ const send = (res, status, body, type = "text/plain; charset=utf-8") => {
 http
   .createServer((req, res) => {
     const url = new URL(req.url, "http://localhost");
-    const clean = decodeURIComponent(url.pathname).replace(/\/+$/, "") || "/index";
+    let clean = decodeURIComponent(url.pathname).replace(/\/+$/, "") || "/index";
+    // The same rewrite public/.htaccess does: every partner shares one exported page.
+    const partner = clean.match(/^\/scholarship\/partner\/[a-z0-9-]+$/i);
+    if (partner) clean = "/scholarship/partner";
     const candidates = [path.join(root, clean), path.join(root, clean + ".html"), path.join(root, clean, "index.html")];
     for (const file of candidates) {
       if (!file.startsWith(root)) break;

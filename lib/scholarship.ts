@@ -90,6 +90,8 @@ export async function applyForScholarship(input: {
   state: string;
   nationality: string;
   course?: string;
+  /** The partner landing page they came from, when there was one. */
+  partner?: string;
 }) {
   return api.post<Registration>("/scholarship/apply", input);
 }

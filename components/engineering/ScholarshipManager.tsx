@@ -34,12 +34,13 @@ import { useStaff } from "@/lib/staff";
 import { cn } from "@/lib/format";
 import type { ScholarshipItem } from "@/lib/scholarship";
 import type { Notify } from "../PortalApp";
+import { Partners } from "./ScholarshipPartners";
 
 const card = "rounded-2xl border border-line bg-white p-5 shadow-sm";
 const input = "h-10 w-full rounded-lg border border-line px-3 text-sm outline-none focus:border-brand";
 const naira = (n: number) => "₦" + new Intl.NumberFormat("en-NG", { maximumFractionDigits: 0 }).format(n);
 
-type Tab = "applicants" | "batches" | "page";
+type Tab = "applicants" | "batches" | "partners" | "page";
 
 /** Everything about the scholarship programme in one screen. */
 export default function ScholarshipManager({ notify }: { notify: Notify }) {
@@ -64,7 +65,7 @@ export default function ScholarshipManager({ notify }: { notify: Notify }) {
     );
   }
 
-  const { programme, batches, applicants, stats } = data;
+  const { programme, batches, partners, applicants, stats } = data;
   const isAdmin = me.role === "admin";
 
   return (
@@ -88,6 +89,7 @@ export default function ScholarshipManager({ notify }: { notify: Notify }) {
           [
             ["applicants", `Applicants (${applicants.length})`],
             ["batches", `Exam batches (${batches.length})`],
+            ["partners", `Partners (${partners.length})`],
             ["page", "Page & form"],
           ] as [Tab, string][]
         ).map(([key, label]) => (
@@ -104,6 +106,7 @@ export default function ScholarshipManager({ notify }: { notify: Notify }) {
       <div className="mt-5">
         {tab === "applicants" && <Applicants applicants={applicants} batches={batches} isAdmin={isAdmin} notify={notify} />}
         {tab === "batches" && <Batches batches={batches} notify={notify} />}
+        {tab === "partners" && <Partners partners={partners} isAdmin={isAdmin} notify={notify} />}
         {tab === "page" && <ProgrammeEditor data={data} isAdmin={isAdmin} notify={notify} />}
       </div>
     </div>

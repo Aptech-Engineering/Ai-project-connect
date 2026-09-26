@@ -72,6 +72,7 @@ final class ScholarshipAdminController
                 'contact' => $content['contact'],
             ],
             'batches' => array_map(static fn ($b) => Scholarship::presentBatch($b, $counts[(int) $b['id']] ?? 0), Scholarship::batches()),
+            'partners' => self::partners(),
             'applicants' => array_map([Scholarship::class, 'presentForStaff'], $applicants),
             'stats' => [
                 'total' => (int) $stats['total'],
@@ -301,9 +302,246 @@ final class ScholarshipAdminController
         Response::noContent();
     }
 
+    /* ---------------- partner landing pages ---------------- */
+
+    /**
+     * Adds a partner. Their page is live at /scholarship/partner/<slug> straight away,
+     * so an organisation that does not want to touch its own website can just link to ours.
+     */
+    public static function createPartner(Request $r): void
+    {
+        $user = Auth::requireStaff(['admin']);
+        $data = self::validatePartner($r->input(), true);
+        $data['slug'] = self::freeSlug($data['slug'] ?? $data['name']);
+        $data['sort_order'] = (int) Database::value('SELECT COALESCE(MAX(sort_order), 0) + 1 FROM scholarship_partners');
+        $id = Database::insert('scholarship_partners', $data);
+        Activity::staff($user, "Added scholarship partner \"{$data['name']}\" (/scholarship/partner/{$data['slug']})");
+        Response::json(self::partnerById($id), 201);
+    }
+
+    public static function updatePartner(Request $r): void
+    {
+        $user = Auth::requireStaff(['admin']);
+        $partner = self::findPartner((int) $r->params['id']);
+        $existing = json_decode((string) ($partner['content'] ?? ''), true);
+        $changes = self::validatePartner($r->input(), false, is_array($existing) ? $existing : []);
+        if (isset($changes['slug']) && $changes['slug'] !== $partner['slug']) {
+            $changes['slug'] = self::freeSlug($changes['slug'], (int) $partner['id']);
+        }
+        if ($changes !== []) {
+            Database::update('scholarship_partners', $changes, ['id' => (int) $partner['id']]);
+        }
+        Activity::staff($user, "Updated scholarship partner \"{$partner['name']}\"");
+        Response::json(self::partnerById((int) $partner['id']));
+    }
+
+    /** Their logo, shown on their page beside the APTECH and AI Project Connect marks. */
+    public static function uploadPartnerLogo(Request $r): void
+    {
+        $user = Auth::requireStaff(['admin']);
+        $partner = self::findPartner((int) $r->params['id']);
+        $upload = $r->file('file');
+        if ($upload === null) {
+            throw HttpError::validation(['file' => 'Choose a logo to upload.']);
+        }
+        $stored = Uploads::store($upload, 'image', 'public', (int) $user['id']);
+        $previous = $partner['logo_file_id'];
+        Database::update('scholarship_partners', ['logo_file_id' => $stored['id']], ['id' => (int) $partner['id']]);
+        if ($previous) {
+            Uploads::delete((int) $previous);
+        }
+        Activity::staff($user, "Updated the logo for scholarship partner \"{$partner['name']}\"");
+        Response::json(self::partnerById((int) $partner['id']));
+    }
+
+    public static function deletePartner(Request $r): void
+    {
+        $user = Auth::requireStaff(['admin']);
+        $partner = self::findPartner((int) $r->params['id']);
+        Database::run('DELETE FROM scholarship_partners WHERE id = ?', [(int) $partner['id']]);
+        if ($partner['logo_file_id']) {
+            Uploads::delete((int) $partner['logo_file_id']);
+        }
+        Activity::staff($user, "Deleted scholarship partner \"{$partner['name']}\"");
+        Response::noContent();
+    }
+
     /* ---------------- helpers ---------------- */
 
-    /** @param list<string> $kinds */
+    /** @return list<array<string, mixed>> */
+    private static function partners(): array
+    {
+        $counts = [];
+        foreach (Database::all('SELECT partner_slug, COUNT(*) AS n FROM scholarship_applicants WHERE partner_slug IS NOT NULL GROUP BY partner_slug') as $row) {
+            $counts[(string) $row['partner_slug']] = (int) $row['n'];
+        }
+        $rows = Database::all(
+            'SELECT p.*, f.public_id AS logo_public_id FROM scholarship_partners p
+             LEFT JOIN files f ON f.id = p.logo_file_id ORDER BY p.sort_order, p.name',
+        );
+        return array_map(static fn ($p) => Scholarship::presentPartnerForStaff($p, $counts[(string) $p['slug']] ?? 0), $rows);
+    }
+
+    private static function partnerById(int $id): array
+    {
+        $row = Database::one(
+            'SELECT p.*, f.public_id AS logo_public_id FROM scholarship_partners p
+             LEFT JOIN files f ON f.id = p.logo_file_id WHERE p.id = ?',
+            [$id],
+        );
+        return Scholarship::presentPartnerForStaff($row);
+    }
+
+    private static function findPartner(int $id): array
+    {
+        $row = Database::one('SELECT * FROM scholarship_partners WHERE id = ?', [$id]);
+        if ($row === null) {
+            throw HttpError::notFound('Partner not found.');
+        }
+        return $row;
+    }
+
+    /** ghessa, ghessa-2, ghessa-3 — never two partners on the same address. */
+    private static function freeSlug(string $wanted, ?int $ignoreId = null): string
+    {
+        $base = trim(preg_replace('/[^a-z0-9]+/', '-', strtolower($wanted)) ?? '', '-');
+        $base = $base === '' ? 'partner' : mb_substr($base, 0, 50);
+        $slug = $base;
+        for ($n = 2; $n < 200; $n++) {
+            $clash = $ignoreId === null
+                ? Database::value('SELECT 1 FROM scholarship_partners WHERE slug = ?', [$slug])
+                : Database::value('SELECT 1 FROM scholarship_partners WHERE slug = ? AND id <> ?', [$slug, $ignoreId]);
+            if (!$clash) {
+                return $slug;
+            }
+            $slug = $base . '-' . $n;
+        }
+        throw HttpError::validation(['slug' => 'Could not find a free address for that name.']);
+    }
+
+    /** @return array<string, mixed> */
+    /**
+     * @param array<string, mixed> $current The partner's existing content, so a save that
+     *                                      touches one section leaves the others alone.
+     * @return array<string, mixed>
+     */
+    private static function validatePartner(array $input, bool $creating, array $current = []): array
+    {
+        $req = $creating ? 'required' : 'nullable';
+        $data = Validator::validate($input, [
+            'name' => "{$req}|string|min:2|max:120",
+            'slug' => 'nullable|string|max:60',
+            'fullName' => 'nullable|string|max:200',
+            'accent' => 'nullable|string|max:7',
+            'website' => 'nullable|string|max:190',
+            'email' => 'nullable|string|max:190',
+            'phone' => 'nullable|string|max:60',
+            'programmeTitle' => 'nullable|string|max:200',
+            'tagline' => 'nullable|string|max:255',
+            'intro' => 'nullable|string|max:5000',
+            'active' => 'nullable|bool',
+        ]);
+
+        $out = [];
+        foreach ([
+            'name' => 'name', 'slug' => 'slug', 'fullName' => 'full_name', 'website' => 'website', 'email' => 'email',
+            'phone' => 'phone', 'programmeTitle' => 'programme_title', 'tagline' => 'tagline', 'intro' => 'intro',
+        ] as $key => $column) {
+            if (!array_key_exists($key, $input)) {
+                continue;
+            }
+            $value = $data[$key] !== null && $data[$key] !== '' ? $data[$key] : null;
+            // name and slug are never blanked; everything else falls back to the programme's.
+            if ($value === null && in_array($key, ['name', 'slug'], true)) {
+                continue;
+            }
+            $out[$column] = $value;
+        }
+        if (!empty($data['accent']) && preg_match('/^#[0-9a-f]{6}$/i', $data['accent'])) {
+            $out['accent'] = strtolower($data['accent']);
+        }
+        if (array_key_exists('active', $data) && $data['active'] !== null) {
+            $out['active'] = $data['active'] ? 1 : 0;
+        }
+
+        // The sections of the page. Only what was sent is touched.
+        $content = $current;
+        foreach (['objectives', 'tracks', 'pathwayDetails', 'eligibility'] as $key) {
+            if (isset($input[$key]) && is_array($input[$key])) {
+                $content[$key] = array_values(array_map(
+                    static fn ($row) => array_filter([
+                        'title' => mb_substr(trim((string) ($row['title'] ?? '')), 0, 160),
+                        'description' => mb_substr(trim((string) ($row['description'] ?? '')), 0, 1000),
+                        'track' => mb_substr(trim((string) ($row['track'] ?? '')), 0, 160),
+                        'focus' => mb_substr(trim((string) ($row['focus'] ?? '')), 0, 400),
+                        'target' => mb_substr(trim((string) ($row['target'] ?? '')), 0, 400),
+                    ], static fn ($v) => $v !== ''),
+                    array_filter($input[$key], 'is_array'),
+                ));
+            }
+        }
+        foreach (['tracksNote', 'pathwayIntro', 'partnerWhy', 'aptechWhy', 'apcWhy'] as $key) {
+            if (array_key_exists($key, $input)) {
+                $content[$key] = mb_substr(trim((string) $input[$key]), 0, 2000);
+            }
+        }
+        if (isset($input['pathwaySteps']) && is_array($input['pathwaySteps'])) {
+            $content['pathwaySteps'] = array_values(array_filter(array_map(
+                static fn ($s) => mb_substr(trim((string) $s), 0, 80),
+                $input['pathwaySteps'],
+            ), static fn ($s) => $s !== ''));
+        }
+        if ($creating && $content === []) {
+            $content = self::defaultPartnerContent();
+        }
+        if ($content !== $current) {
+            $out['content'] = json_encode($content, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        }
+
+        return $out;
+    }
+
+    /**
+     * What a brand new partner page says before anyone edits it: the programme as it
+     * stands, with the partner's own paragraph left for them to write.
+     *
+     * @return array<string, mixed>
+     */
+    private static function defaultPartnerContent(): array
+    {
+        return [
+            'objectives' => [
+                ['title' => 'Digital skill empowerment', 'description' => 'Subsidised, industry-aligned IT education that closes the digital skills gap in local communities.'],
+                ['title' => 'Career acceleration', 'description' => 'Workforce-ready technical expertise in the technology areas employers are hiring for.'],
+                ['title' => 'Higher education pathways', 'description' => 'A clear route on to internationally recognised professional diplomas and university degrees.'],
+                ['title' => 'Socio-economic growth', 'description' => 'Employment and youth entrepreneurship through practical training and certification.'],
+            ],
+            'tracks' => [
+                ['track' => 'Office Automation', 'focus' => 'MS Office suite, document management, productivity tools', 'target' => 'Workplace administrative efficiency'],
+                ['track' => 'Data Analysis', 'focus' => 'Excel analytics, data visualisation, BI fundamentals', 'target' => 'Business intelligence and decision support'],
+                ['track' => 'Cybersecurity', 'focus' => 'Network fundamentals, threat defence, security principles', 'target' => 'Essential system protection'],
+                ['track' => 'Programming with Python', 'focus' => 'Core logic, data structures, automation and scripting', 'target' => 'Software logic and scripting competency'],
+                ['track' => 'Web Development', 'focus' => 'HTML5, CSS3, JavaScript, responsive layouts', 'target' => 'Modern web design and front-end development'],
+            ],
+            'tracksNote' => 'Further tracks including Database Administration, Graphic Design and Networking are also open under the programme.',
+            'pathwaySteps' => ['Short-term course', 'Foundation certificate', 'Advanced Diploma (ADSE)', 'HND / B.Sc. credit transfer'],
+            'pathwayIntro' => 'Beyond the short-term course, the scholarship opens a direct progression to advanced professional qualifications and tertiary degrees through APTECH\'s international credit transfer framework.',
+            'pathwayDetails' => [
+                ['title' => 'Short-term skill acquisition', 'description' => 'Complete the introductory modules and you qualify for merit evaluation into the advanced specialisation tracks.'],
+                ['title' => 'Advanced Diploma in Software Engineering (ADSE)', 'description' => 'Top performers are eligible for full or partial scholarship places on APTECH\'s flagship multi-semester ADSE programme.'],
+                ['title' => 'Credit transfer for HND / B.Sc.', 'description' => 'ADSE graduates can use APTECH\'s credit transfer tie-ups with partner universities (UK, Australia and others) to finish a B.Sc. or HND in less time and at lower cost.'],
+            ],
+            'eligibility' => [
+                ['title' => 'Who can apply?', 'description' => 'Nigerian citizens: students, secondary school graduates, job seekers and working professionals who want modern IT skills.'],
+                ['title' => 'What you need', 'description' => 'An interest in technology. Register online and choose your preferred accredited APTECH centre.'],
+                ['title' => 'How to enrol', 'description' => 'Register, pay the scholarship form fee, then sit the entrance assessment at the centre. Your form and exam date are issued once the fee is confirmed.'],
+            ],
+            'partnerWhy' => '',
+            'aptechWhy' => 'APTECH Computer Education is a global IT training institution with over 30 years of skill-based education across 40+ countries.',
+            'apcWhy' => 'AI Projects LTD runs the application, payment and exam scheduling for the programme through AI Project Connect.',
+        ];
+    }
+
     private static function notify(array $applicant, array $kinds): void
     {
         if ($kinds === []) {

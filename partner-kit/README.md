@@ -5,7 +5,26 @@ A ready-made landing page for organisations we run the scholarship with. It carr
 shape their own documents use, and its Register button sends people to
 `aiprojectconnect.com.ng/scholarship` to apply and pay.
 
-The partner hosts it on their own domain, e.g. `ghessa.com.ng/aiprojectconnectscholarship`.
+There are two ways a partner can have one. **Most partners want the second.**
+
+| | Where it lives | Who sets it up |
+|---|---|---|
+| **They host it** | their own domain, e.g. `ghessa.com.ng/aiprojectconnectscholarship` | we build a single HTML file here and send it to them |
+| **We host it** | `aiprojectconnect.com.ng/scholarship/partner/<their-name>` | an admin adds them in the panel — nothing changes on their website |
+
+### We host it (no work for the partner)
+
+Engineering Panel → **Our programmes → Scholarship → Partners → Add a partner**. Type
+their name and the page exists immediately, already carrying the programme's wording,
+the live fee, seats and deadline. Then upload their logo, set their colour, and edit
+any section. Copy the link and send it to them — that is all they have to do with it.
+
+Everyone who registers from their page is counted against them, so the Partners tab
+shows how many views and how many registrations each partner has brought in.
+
+### They host it
+
+The rest of this file covers that case: one HTML file they drop on their own server.
 
 ## Making a page for a new partner
 

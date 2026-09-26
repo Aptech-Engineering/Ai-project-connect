@@ -23,6 +23,12 @@ const STATES = [
 
 type Step = "details" | "pay" | "transfer" | "sent";
 
+/** ?partner=ghessa — set when a partner's landing page sent them here. */
+function partnerFromUrl(): string | undefined {
+  if (typeof window === "undefined") return undefined;
+  return new URLSearchParams(window.location.search).get("partner") || undefined;
+}
+
 export function RegisterDialog({ programme, onClose }: { programme: ScholarshipProgramme; onClose: () => void }) {
   const [step, setStep] = useState<Step>("details");
   const [registration, setRegistration] = useState<Registration | null>(null);
@@ -44,7 +50,7 @@ export function RegisterDialog({ programme, onClose }: { programme: ScholarshipP
     setBusy(true);
     setError("");
     try {
-      setRegistration(await applyForScholarship({ ...form, course: form.course || undefined }));
+      setRegistration(await applyForScholarship({ ...form, course: form.course || undefined, partner: partnerFromUrl() }));
       setStep("pay");
     } catch (e) {
       setError(errorMessage(e));
