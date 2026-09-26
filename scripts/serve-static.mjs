@@ -9,6 +9,9 @@ import path from "node:path";
 
 const root = path.resolve(process.argv[2] ?? "out");
 const port = Number(process.argv[3] ?? 3100);
+// A production build calls /api on its own host. Forward it to the PHP server so the
+// exported files can be tested exactly as they will run, same origin and all.
+const api = process.env.APC_API_ORIGIN ?? "http://127.0.0.1:8088";
 
 const TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -32,6 +35,19 @@ const send = (res, status, body, type = "text/plain; charset=utf-8") => {
 http
   .createServer((req, res) => {
     const url = new URL(req.url, "http://localhost");
+    if (url.pathname.startsWith("/api")) {
+      const target = new URL(url.pathname + url.search, api);
+      const upstream = http.request(
+        target,
+        { method: req.method, headers: { ...req.headers, host: target.host } },
+        (r) => {
+          res.writeHead(r.statusCode ?? 502, r.headers);
+          r.pipe(res);
+        },
+      );
+      upstream.on("error", () => send(res, 502, `Cannot reach the API at ${api}. Is it running?`));
+      return req.pipe(upstream);
+    }
     let clean = decodeURIComponent(url.pathname).replace(/\/+$/, "") || "/index";
     // The same rewrite public/.htaccess does: every partner shares one exported page.
     const partner = clean.match(/^\/scholarship\/partner\/[a-z0-9-]+$/i);

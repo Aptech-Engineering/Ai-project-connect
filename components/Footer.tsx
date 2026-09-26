@@ -82,7 +82,7 @@ export default function Footer({ notify, onSubmitIdea }: { notify: Notify; onSub
       {/* links */}
       <div className="container-page grid gap-10 py-14 sm:py-16 lg:grid-cols-[1.3fr_2fr]">
         <div>
-          <Logo />
+          <Logo aptech />
           <p className="mt-4 max-w-sm leading-relaxed text-white/60">
             {footer.about}
           </p>

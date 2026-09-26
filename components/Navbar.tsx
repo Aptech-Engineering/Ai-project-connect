@@ -35,7 +35,7 @@ export default function Navbar({ client, onSignOut, onSubmitIdea }: { client?: s
       <AnnouncementBar onSubmitIdea={onSubmitIdea} />
       <nav className="container-page flex h-16 items-center justify-between gap-4">
         <a href="#top" aria-label="AI Project Connect home">
-          <Logo />
+          <Logo aptech />
         </a>
 
         <div className="hidden items-center gap-1 md:flex">

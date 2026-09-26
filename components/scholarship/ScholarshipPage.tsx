@@ -6,6 +6,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { ArrowRight, BadgeCheck, CalendarDays, CheckCircle2, GraduationCap, Loader2, MapPin, Phone, Ticket, Users } from "lucide-react";
 import { useScholarship, type ScholarshipProgramme } from "@/lib/scholarship";
 import { cn } from "@/lib/format";
+import AptechMark from "../AptechMark";
 import { RegisterDialog } from "./RegisterDialog";
 
 /** Formats 27000 as ₦27,000 — the fee is always whole naira. */
@@ -68,10 +69,14 @@ function Hero({ programme, onRegister }: { programme: ScholarshipProgramme; onRe
         <div className="absolute -right-24 bottom-0 size-[26rem] rounded-full bg-brand/20 blur-3xl" />
       </div>
       <div className="container-page relative">
-        <Link href="/" className="inline-flex items-center gap-2 text-sm font-semibold text-white/70 transition hover:text-white">
-          <span className="grid size-7 place-items-center rounded-lg bg-brand font-display text-xs font-bold">AI</span>
-          AI Project Connect
-        </Link>
+        <div className="flex flex-wrap items-center gap-3">
+          <Link href="/" className="inline-flex items-center gap-2 text-sm font-semibold text-white/70 transition hover:text-white">
+            <span className="grid size-7 place-items-center rounded-lg bg-brand font-display text-xs font-bold">AI</span>
+            AI Project Connect
+          </Link>
+          <span className="h-6 w-px bg-white/20" aria-hidden />
+          <AptechMark height="h-7" />
+        </div>
 
         <span className="mt-8 inline-flex items-center gap-2 rounded-full bg-teal/15 px-3 py-1 text-xs font-bold uppercase tracking-wider text-teal-200 ring-1 ring-teal/30">
           <GraduationCap className="size-3.5" /> Learn · Grow · Build your future

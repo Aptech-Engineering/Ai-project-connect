@@ -2,8 +2,9 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { ArrowRight, BadgeCheck, GraduationCap, Loader2, MapPin, Phone } from "lucide-react";
+import { ArrowRight, BadgeCheck, Loader2, MapPin } from "lucide-react";
 import { api, errorMessage } from "@/lib/api";
+import AptechMark from "../AptechMark";
 import type { ScholarshipProgramme } from "@/lib/scholarship";
 import { formatDay, money } from "./ScholarshipPage";
 
@@ -102,6 +103,8 @@ export function PartnerPage() {
           ) : (
             <span className="font-display text-lg font-bold text-navy">{p.name}</span>
           )}
+          <span className="h-8 w-px bg-line" />
+          <AptechMark height="h-8" className="px-0" />
           <span className="h-8 w-px bg-line" />
           <Link href="/" className="inline-flex items-center gap-2">
             <span className="grid size-7 place-items-center rounded-lg bg-brand font-display text-xs font-bold text-white">AI</span>
@@ -249,7 +252,7 @@ export function PartnerPage() {
             {p.partnerWhy && <p className="mt-1 text-sm text-muted">{p.partnerWhy}</p>}
           </article>
           <article className="rounded-2xl border border-line bg-white p-5 shadow-sm">
-            <GraduationCap className="mb-3 size-8 text-brand" />
+            <AptechMark height="h-11" className="mb-3 px-0" />
             <h3 className="font-display font-bold text-navy">APTECH Computer Education</h3>
             <p className="mt-1 text-sm text-muted">
               {p.aptechWhy || "A global IT training institution with over 30 years of skill-based education across 40+ countries."}
@@ -280,7 +283,7 @@ export function PartnerPage() {
       </section>
 
       <footer className="bg-[#071426] py-8 text-sm text-white/65">
-        <div className="container-page grid gap-6 sm:grid-cols-3">
+        <div className="container-page grid gap-6 sm:grid-cols-2">
           <div>
             <p className="font-bold text-white">{p.name}</p>
             {p.website && (
@@ -303,18 +306,10 @@ export function PartnerPage() {
             <p className="font-bold text-white">The centre</p>
             <p className="flex gap-2">
               <MapPin className="mt-0.5 size-4 shrink-0" />
-              {programme.contact?.address ?? "Aptech Kaduna"}
+              Aptech Centre
             </p>
           </div>
-          <div>
-            <p className="font-bold text-white">Enquiries</p>
-            {(programme.contact?.phones ?? []).map((phone) => (
-              <a key={phone} href={`tel:${phone.replace(/[^\d+]/g, "")}`} className="flex items-center gap-1.5 hover:text-white">
-                <Phone className="size-3.5" /> {phone}
-              </a>
-            ))}
-          </div>
-          <p className="border-t border-white/10 pt-4 text-xs text-white/45 sm:col-span-3">
+          <p className="border-t border-white/10 pt-4 text-xs text-white/45 sm:col-span-2">
             © {new Date().getFullYear()} {p.name} · APTECH Computer Education · AI Projects LTD. Applications, payments and exam results are handled by AI
             Project Connect.
           </p>

@@ -1,4 +1,4 @@
--- Nigeria Independence Day Scholarship Programme (/scholarship).
+-- Nigeria Independence Month Scholarship Programme (/scholarship).
 --
 -- One editable programme, its exam batches, and the people who applied and paid
 -- the form fee. Applicants are not clients and not leads: they pay a form fee,
@@ -89,9 +89,9 @@ CREATE TABLE IF NOT EXISTS scholarship_applicants (
 -- The programme as it stands on the flier; an admin edits all of it in the panel.
 INSERT INTO scholarship_programme (id, title, tagline, intro, fee_kobo, seats, deadline, content, active)
 SELECT 1,
-       'Nigeria Independence Day Scholarship Programme',
+       'Nigeria Independence Month Scholarship Programme',
        'Learn · Grow · Build your future',
-       'This Independence Day, invest in your future. APTECH Computer Education, in partnership with AI Projects LTD, is offering a special scholarship opportunity for everyone. Pay the form fee, sit the entrance exam, and study completely free of tuition.',
+       'This Independence Month, invest in your future. APTECH Computer Education, in partnership with AI Projects LTD, is offering a special scholarship opportunity for everyone. Pay the form fee, sit the entrance exam, and study completely free of tuition.',
        2700000, 500, '2026-10-12',
        '{"courses":[{"title":"CyberSecurity","description":"Protect networks, learn threat analysis, and digital defence essentials."},{"title":"Data Analysis","description":"Master Excel, SQL and data visualisation tools for data-driven decisions."},{"title":"Programming with Python","description":"Build foundational programming logic and automation scripts."},{"title":"AI Prompt Engineering","description":"Harness cutting-edge generative AI models for maximum productivity."},{"title":"Office Automation","description":"Practical proficiency in MS Word, Excel, PowerPoint and office tools."},{"title":"Digital Marketing & Design","description":"Explore web development, graphic design (Photoshop/CorelDRAW) and SEO."}],"benefits":[{"title":"Expert instructors","description":"Learn directly from certified and highly experienced tech professionals."},{"title":"Practical training","description":"Hands-on, practical-focused curriculum designed for real-world application."},{"title":"Career support","description":"Boost your professional resume and open doors to competitive tech careers."},{"title":"100% tuition free","description":"Pass the scholarship entrance exam and study completely free of tuition costs."}],"steps":[{"title":"Get the form","description":"Register and pay the scholarship form fee."},{"title":"Take the exam","description":"Sit the entrance assessment exam at the centre."},{"title":"Study free","description":"Pass and secure your 100% tuition scholarship."}],"contact":{"address":"Disney Chicken Plaza, Plot 35 Aliyu Makama by Barnawa Complex, Opposite A A Rano Filling Station, Kaduna State.","organisers":"APTECH Computer Education | AI Projects LTD","phones":["0903 848 3923 (call & WhatsApp)","0704 988 9785 (WhatsApp)","0703 384 7560","0704 982 8278"]}}',
        1
