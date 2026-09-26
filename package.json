@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "build:prod": "node scripts/build-prod.mjs",
     "start": "next start",
     "serve": "node scripts/serve-static.mjs out 3000"
   },
