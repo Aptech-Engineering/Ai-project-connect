@@ -8,6 +8,9 @@ Options -Indexes
     # Both spellings reach the programme page.
     RewriteRule ^scholarships/?$ /scholarship/ [R=301,L,NC]
 
+    # And both spellings reach the student pass.
+    RewriteRule ^students/?$ /student/ [R=301,L,NC]
+
     # /kadunacentre is a shortcut to the Aptech Kaduna site. Server-side so it works
     # with JavaScript off, before any of the rules below can claim the path.
     RewriteRule ^kadunacentre/?$ https://aptechwebsite.vercel.app/ [R=302,L,NC]

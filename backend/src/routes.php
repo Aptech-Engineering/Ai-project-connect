@@ -20,6 +20,8 @@ use App\Controllers\PublicController as Pub;
 use App\Controllers\ScholarshipAdminController as ScholarshipAdmin;
 use App\Controllers\ScholarshipController as Scholarship;
 use App\Controllers\StaffAuthController as StaffAuth;
+use App\Controllers\StudentsAdminController as StudentsAdmin;
+use App\Controllers\StudentsController as StudentsPublic;
 use App\Controllers\StaffController as Staff;
 use App\Core\Router;
 
@@ -33,6 +35,10 @@ return static function (Router $r): void {
     $r->post('/api/ideas', [Apply::class, 'createComplete']);
     $r->get('/api/ideas/{ref}', [Pub::class, 'ideaStatus']);
     $r->post('/api/course-enquiries', [Pub::class, 'courseEnquiry']);
+
+    /* ---------- students (/student) ---------- */
+    $r->post('/api/students/sign-in', [StudentsPublic::class, 'signIn']);
+    $r->get('/api/students/status', [StudentsPublic::class, 'status']);
 
     /* ---------- scholarship programme (/scholarship) ---------- */
     $r->get('/api/scholarship', [Scholarship::class, 'show']);
@@ -188,6 +194,15 @@ return static function (Router $r): void {
     $r->post('/api/staff/scholarship/batches', [ScholarshipAdmin::class, 'createBatch']);
     $r->patch('/api/staff/scholarship/batches/{id}', [ScholarshipAdmin::class, 'updateBatch']);
     $r->delete('/api/staff/scholarship/batches/{id}', [ScholarshipAdmin::class, 'deleteBatch']);
+    /* ---------- the student register ---------- */
+    $r->get('/api/staff/students', [StudentsAdmin::class, 'index']);
+    $r->post('/api/staff/students', [StudentsAdmin::class, 'store']);
+    $r->get('/api/staff/students/{id}', [StudentsAdmin::class, 'show']);
+    $r->patch('/api/staff/students/{id}', [StudentsAdmin::class, 'update']);
+    $r->delete('/api/staff/students/{id}', [StudentsAdmin::class, 'destroy']);
+    $r->post('/api/staff/students/{id}/payments', [StudentsAdmin::class, 'addPayment']);
+    $r->delete('/api/staff/students/{id}/payments/{paymentId}', [StudentsAdmin::class, 'deletePayment']);
+
     $r->post('/api/staff/scholarship/partners', [ScholarshipAdmin::class, 'createPartner']);
     $r->patch('/api/staff/scholarship/partners/{id}', [ScholarshipAdmin::class, 'updatePartner']);
     $r->post('/api/staff/scholarship/partners/{id}/logo', [ScholarshipAdmin::class, 'uploadPartnerLogo']);

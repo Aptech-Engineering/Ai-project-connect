@@ -5,6 +5,7 @@ import Link from "next/link";
 import { AnimatePresence, LayoutGroup, motion } from "framer-motion";
 import {
   AlertTriangle,
+  IdCard,
   ArrowUpRight,
   CheckCheck,
   ChevronRight,
@@ -55,11 +56,12 @@ import SettingsScreen from "./SettingsScreen";
 import { SlidersHorizontal } from "lucide-react";
 import { Wallet as WalletIcon } from "lucide-react";
 import ScholarshipManager from "./ScholarshipManager";
+import StudentsManager from "./StudentsManager";
 import { CoursesEditor } from "./cms/CatalogEditors";
 import { ROLES, useStaff } from "@/lib/staff";
 import ContentManager from "./cms/ContentManager";
 
-type View = "projects" | "approvals" | "ideas" | "messages" | "leads" | "courses" | "scholarship" | "outbox" | "website" | "users" | "reports" | "activity" | "payments" | "settings";
+type View = "projects" | "approvals" | "ideas" | "messages" | "leads" | "courses" | "students" | "scholarship" | "outbox" | "website" | "users" | "reports" | "activity" | "payments" | "settings";
 
 const BOARD: StageKey[] = ["UNDER_REVIEW", "DESIGN", "DEVELOPMENT", "TESTING", "DEPLOYMENT", "DELIVERED", "ON_HOLD"];
 
@@ -149,6 +151,9 @@ export default function Dashboard({ onSignOut, notify }: { onSignOut: () => void
         <>
           <NavItem active={view === "courses" && !selected} onClick={() => go("courses")} icon={<BookOpen className="size-5" />}>
             Courses & pricing
+          </NavItem>
+          <NavItem active={view === "students" && !selected} onClick={() => go("students")} icon={<IdCard className="size-5" />}>
+            Students
           </NavItem>
           <p className="mt-4 px-3 pb-1 text-[11px] font-bold uppercase tracking-wider text-white/40">Our programmes</p>
           <NavItem active={view === "scholarship" && !selected} onClick={() => go("scholarship")} icon={<GraduationCap className="size-5" />}>
@@ -304,6 +309,10 @@ export default function Dashboard({ onSignOut, notify }: { onSignOut: () => void
             ) : view === "leads" && (me.role === "admin" || me.role === "counsellor") ? (
               <motion.div key="leads" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
                 <LeadsQueue notify={notify} />
+              </motion.div>
+            ) : view === "students" && (me.role === "admin" || me.role === "counsellor") ? (
+              <motion.div key="students" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+                <StudentsManager notify={notify} />
               </motion.div>
             ) : view === "scholarship" && (me.role === "admin" || me.role === "counsellor") ? (
               <motion.div key="scholarship" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
