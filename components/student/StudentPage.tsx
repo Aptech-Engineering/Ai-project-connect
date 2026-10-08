@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { AlertTriangle, CheckCircle2, Download, Loader2, LogOut, RefreshCw, Share, WifiOff, XCircle } from "lucide-react";
+import { AnimatePresence, motion } from "framer-motion";
+import { AlertTriangle, CheckCircle2, Download, Loader2, LogOut, RefreshCw, Share, WifiOff, X, XCircle } from "lucide-react";
 import { errorMessage, ApiError } from "@/lib/api";
 import { studentSignIn, studentStatus, type StudentProfile } from "@/lib/students";
 import { cn } from "@/lib/format";
@@ -145,10 +146,13 @@ export function StudentPage() {
 /* ---------------- signing in ---------------- */
 
 function SignIn({ error, onDone }: { error: string; onDone: (p: StudentProfile) => void }) {
-  const [form, setForm] = useState({ studentId: "", firstName: "", lastName: "" });
+  const [form, setForm] = useState({ firstName: "", lastName: "", studentId: "", phone: "" });
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState("");
-  const valid = form.studentId.trim().length > 2 && form.firstName.trim().length > 1 && form.lastName.trim().length > 1;
+  // Two students share this name: one more detail settles it.
+  const [namesake, setNamesake] = useState(false);
+  const set = (patch: Partial<typeof form>) => setForm((f) => ({ ...f, ...patch }));
+  const valid = form.firstName.trim().length > 1 && form.lastName.trim().length > 1;
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -156,15 +160,30 @@ function SignIn({ error, onDone }: { error: string; onDone: (p: StudentProfile) 
     setBusy(true);
     setProblem("");
     try {
-      onDone(await studentSignIn({ studentId: form.studentId.trim(), firstName: form.firstName.trim(), lastName: form.lastName.trim() }));
+      onDone(
+        await studentSignIn({
+          firstName: form.firstName.trim(),
+          lastName: form.lastName.trim(),
+          studentId: form.studentId.trim() || undefined,
+          phone: form.phone.trim() || undefined,
+        }),
+      );
     } catch (err) {
-      setProblem(errorMessage(err));
+      // The server says which extra detail it wants; show the field for it.
+      if (err instanceof ApiError && err.errors.studentId) {
+        setNamesake(true);
+        setProblem(`${err.message} ${err.errors.studentId}`);
+      } else {
+        setProblem(errorMessage(err));
+      }
     } finally {
       setBusy(false);
     }
   };
 
-  const field = "h-12 w-full rounded-xl border border-white/15 bg-white/5 px-4 text-base text-white outline-none placeholder:text-white/35 focus:border-brand";
+  const field =
+    "h-12 w-full rounded-xl border border-white/15 bg-white/5 px-4 text-base text-white outline-none placeholder:text-white/35 focus:border-brand";
+  const labelClass = "block text-xs font-bold uppercase tracking-wider text-white/55";
 
   return (
     <main className="min-h-screen bg-navy-950 px-4 py-10 text-white">
@@ -180,7 +199,7 @@ function SignIn({ error, onDone }: { error: string; onDone: (p: StudentProfile) 
 
         <h1 className="mt-8 font-display text-3xl font-extrabold leading-tight">Your student pass</h1>
         <p className="mt-2 text-sm text-white/65">
-          Sign in once. Your phone remembers you, so at the gate you just open this page and show it.
+          Your name is enough. Sign in once and your phone remembers you, so at the gate you just open this page and show it.
         </p>
 
         {(problem || error) && (
@@ -191,40 +210,59 @@ function SignIn({ error, onDone }: { error: string; onDone: (p: StudentProfile) 
         )}
 
         <form onSubmit={submit} className="mt-6 space-y-3">
-          <label className="block text-xs font-bold uppercase tracking-wider text-white/55">
-            Student ID
-            <input
-              id="student-id"
-              value={form.studentId}
-              onChange={(e) => setForm({ ...form, studentId: e.target.value })}
-              placeholder="APC/26/0001"
-              autoCapitalize="characters"
-              autoComplete="username"
-              className={cn(field, "mt-1.5 font-mono")}
-            />
-          </label>
-          <label className="block text-xs font-bold uppercase tracking-wider text-white/55">
+          <label className={labelClass}>
             First name
             <input
               id="student-first"
               value={form.firstName}
-              onChange={(e) => setForm({ ...form, firstName: e.target.value })}
+              onChange={(e) => set({ firstName: e.target.value })}
               placeholder="Emmanuel"
               autoComplete="given-name"
               className={cn(field, "mt-1.5")}
             />
           </label>
-          <label className="block text-xs font-bold uppercase tracking-wider text-white/55">
+          <label className={labelClass}>
             Last name
             <input
               id="student-last"
               value={form.lastName}
-              onChange={(e) => setForm({ ...form, lastName: e.target.value })}
+              onChange={(e) => set({ lastName: e.target.value })}
               placeholder="Adewunmi"
               autoComplete="family-name"
               className={cn(field, "mt-1.5")}
             />
           </label>
+
+          <label className={labelClass}>
+            Student ID <span className="font-sans normal-case tracking-normal text-white/35">— only if you know it</span>
+            <input
+              id="student-id"
+              value={form.studentId}
+              onChange={(e) => set({ studentId: e.target.value })}
+              placeholder="APC/26/0001"
+              autoCapitalize="characters"
+              className={cn(field, "mt-1.5 font-mono")}
+            />
+          </label>
+
+          {namesake && (
+            <label className={labelClass}>
+              Phone number on your record
+              <input
+                id="student-phone"
+                value={form.phone}
+                onChange={(e) => set({ phone: e.target.value })}
+                placeholder="0803 000 0000"
+                inputMode="tel"
+                autoComplete="tel"
+                className={cn(field, "mt-1.5")}
+              />
+              <span className="mt-1 block font-sans text-[11px] font-normal normal-case tracking-normal text-white/45">
+                Either this or your Student ID will do.
+              </span>
+            </label>
+          )}
+
           <button
             type="submit"
             disabled={!valid || busy}
@@ -236,7 +274,7 @@ function SignIn({ error, onDone }: { error: string; onDone: (p: StudentProfile) 
         </form>
 
         <p className="mt-6 text-xs text-white/45">
-          Don&rsquo;t know your Student ID? Ask at the front desk. Nobody can see your record without it.
+          Not finding yourself? Ask at the front desk — your name may be spelled differently on the register.
         </p>
         <Link href="/" className="mt-6 inline-block text-xs font-semibold text-white/50 underline-offset-4 hover:text-white hover:underline">
           ← aiprojectconnect.com.ng
@@ -269,6 +307,23 @@ function GateCard({
     const t = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(t);
   }, []);
+
+  const install = useInstall();
+  const { installed } = install;
+  const [sheet, setSheet] = useState(false);
+  // A few seconds in: the student has read their status, and has not left.
+  useEffect(() => {
+    if (installed || install.state === "none") return;
+    let putOff = 0;
+    try {
+      putOff = Number(localStorage.getItem(DISMISSED) ?? 0);
+    } catch {
+      /* no storage, so ask */
+    }
+    if (Date.now() - putOff < NAG_AFTER_DAYS * 86400000) return;
+    const t = window.setTimeout(() => setSheet(true), 3500);
+    return () => window.clearTimeout(t);
+  }, [installed, install.state]);
 
   const { verdict } = profile;
   const checkedAt = new Date(profile.checkedAt).getTime();
@@ -375,12 +430,36 @@ function GateCard({
           </section>
         )}
 
-        <InstallPrompt />
+        {!installed && install.state !== "none" && (
+          <button
+            onClick={() => setSheet(true)}
+            className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-white/25 py-3 text-sm font-bold text-white/85 hover:border-brand hover:text-white"
+          >
+            <Download className="size-4 text-brand" /> Save this pass to your phone
+          </button>
+        )}
 
         <button onClick={onSignOut} className="mt-5 flex w-full items-center justify-center gap-1.5 text-xs font-semibold text-white/40 hover:text-white/70">
           <LogOut className="size-3.5" /> Not you? Sign out of this phone
         </button>
       </div>
+
+      <AnimatePresence>
+        {sheet && install.state !== "none" && (
+          <InstallSheet
+            state={install.state}
+            onInstall={() => void install.install().then(() => setSheet(false))}
+            onClose={() => {
+              setSheet(false);
+              try {
+                localStorage.setItem(DISMISSED, String(Date.now()));
+              } catch {
+                /* nothing to remember on a phone with storage off */
+              }
+            }}
+          />
+        )}
+      </AnimatePresence>
     </main>
   );
 }
@@ -412,64 +491,135 @@ interface InstallEvent extends Event {
   userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
 }
 
+/** Put off once, left alone for a week. */
+const DISMISSED = "apc.student.install.dismissed";
+const NAG_AFTER_DAYS = 7;
+
 /**
- * Android and desktop Chrome hand us an install event; iOS has none, so there it is
- * a one-line instruction instead. Either way the student stops typing the address.
+ * Saving the pass to the home screen is the whole point of it being a web app, so
+ * it asks rather than waits to be found: a card slides up a few seconds after the
+ * status is on screen — long enough to read the status first, early enough to be
+ * seen. Android and desktop Chrome hand us the real install event; iOS has none,
+ * so there it is the two taps spelled out, pointing at the Share button.
  */
-function InstallPrompt() {
+function useInstall() {
   const deferred = useRef<InstallEvent | null>(null);
-  const [canInstall, setCanInstall] = useState(false);
-  const [iosHint, setIosHint] = useState(false);
-  const [done, setDone] = useState(false);
+  const [state, setState] = useState<"none" | "ready" | "ios">("none");
+  const [installed, setInstalled] = useState(false);
 
   useEffect(() => {
     const standalone =
       window.matchMedia("(display-mode: standalone)").matches || (window.navigator as { standalone?: boolean }).standalone === true;
     if (standalone) {
-      setDone(true);
+      setInstalled(true);
       return;
     }
+
+    // The head script may have caught it before this ever ran.
+    const parked = () => (window as unknown as { __apcInstall?: InstallEvent | null }).__apcInstall ?? null;
+    const take = () => {
+      const e = parked();
+      if (e) {
+        deferred.current = e;
+        setState("ready");
+      }
+    };
+    take();
+
     const onPrompt = (e: Event) => {
       e.preventDefault();
       deferred.current = e as InstallEvent;
-      setCanInstall(true);
+      setState("ready");
     };
+    const onInstalled = () => setInstalled(true);
+    window.addEventListener("apc-installable", take);
     window.addEventListener("beforeinstallprompt", onPrompt);
-    // iOS Safari never fires it.
-    if (/iphone|ipad|ipod/i.test(navigator.userAgent)) setIosHint(true);
-    return () => window.removeEventListener("beforeinstallprompt", onPrompt);
+    window.addEventListener("appinstalled", onInstalled);
+    // iOS Safari never fires beforeinstallprompt.
+    if (/iphone|ipad|ipod/i.test(navigator.userAgent) && !/crios|fxios/i.test(navigator.userAgent)) setState("ios");
+    return () => {
+      window.removeEventListener("apc-installable", take);
+      window.removeEventListener("beforeinstallprompt", onPrompt);
+      window.removeEventListener("appinstalled", onInstalled);
+    };
   }, []);
 
-  if (done) return null;
+  const install = async () => {
+    const e = deferred.current;
+    if (!e) return false;
+    await e.prompt();
+    const choice = await e.userChoice;
+    deferred.current = null;
+    (window as unknown as { __apcInstall?: InstallEvent | null }).__apcInstall = null;
+    setState("none");
+    if (choice.outcome === "accepted") setInstalled(true);
+    return choice.outcome === "accepted";
+  };
 
-  if (canInstall) {
-    return (
-      <button
-        onClick={async () => {
-          const e = deferred.current;
-          if (!e) return;
-          await e.prompt();
-          const choice = await e.userChoice;
-          if (choice.outcome === "accepted") setDone(true);
-          deferred.current = null;
-          setCanInstall(false);
-        }}
-        className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-white/25 py-3 text-sm font-bold text-white/85 hover:border-brand hover:text-white"
-      >
-        <Download className="size-4 text-brand" /> Save this pass to your phone
-      </button>
-    );
-  }
+  return { state, installed, install };
+}
 
-  if (iosHint) {
-    return (
-      <p className="mt-4 flex items-start gap-2 rounded-xl border border-dashed border-white/20 p-3 text-xs text-white/60">
-        <Share className="mt-0.5 size-4 shrink-0 text-brand" />
-        To keep this on your phone: tap <span className="font-bold text-white/85">Share</span>, then{" "}
-        <span className="font-bold text-white/85">Add to Home Screen</span>.
-      </p>
-    );
-  }
+/** The card itself. `force` is the student asking for it again from the footer. */
+function InstallSheet({
+  state,
+  onInstall,
+  onClose,
+}: {
+  state: "ready" | "ios";
+  onInstall: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <motion.div
+      initial={{ y: 120, opacity: 0 }}
+      animate={{ y: 0, opacity: 1 }}
+      exit={{ y: 120, opacity: 0 }}
+      transition={{ type: "spring", stiffness: 260, damping: 26 }}
+      className="fixed inset-x-0 bottom-0 z-50 px-3 pb-3"
+      role="dialog"
+      aria-label="Save this pass to your phone"
+    >
+      <div className="mx-auto w-full max-w-md rounded-2xl border border-white/15 bg-navy-800 p-4 shadow-2xl shadow-black/50">
+        <div className="flex items-start gap-3">
+          <img src="/icon-192.png" alt="" className="size-11 shrink-0 rounded-xl" />
+          <div className="min-w-0 flex-1">
+            <p className="font-display text-sm font-bold text-white">Keep your pass on your phone</p>
+            <p className="mt-0.5 text-xs text-white/65">
+              {state === "ios"
+                ? "Add it to your Home Screen and it opens like an app — no typing at the gate."
+                : "One tap at the gate, even on a bad network. No address to type."}
+            </p>
+          </div>
+          <button onClick={onClose} aria-label="Not now" className="-m-1 shrink-0 rounded-lg p-1 text-white/45 hover:text-white">
+            <X className="size-4" />
+          </button>
+        </div>
 
-  return null;
+        {state === "ios" ? (
+          <ol className="mt-3 space-y-1.5 text-xs text-white/75">
+            <li className="flex items-center gap-2">
+              <span className="grid size-5 shrink-0 place-items-center rounded-md bg-white/10 text-[10px] font-bold">1</span>
+              Tap <Share className="size-3.5 text-brand" /> <span className="font-bold text-white">Share</span> at the bottom of Safari
+            </li>
+            <li className="flex items-center gap-2">
+              <span className="grid size-5 shrink-0 place-items-center rounded-md bg-white/10 text-[10px] font-bold">2</span>
+              Choose <span className="font-bold text-white">Add to Home Screen</span>
+            </li>
+          </ol>
+        ) : (
+          <div className="mt-3 flex gap-2">
+            <button
+              onClick={onInstall}
+              className="flex h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-brand text-sm font-bold text-white hover:bg-brand-600"
+            >
+              <Download className="size-4" /> Save to my phone
+            </button>
+            <button onClick={onClose} className="h-11 rounded-xl px-4 text-sm font-bold text-white/55 hover:text-white">
+              Not now
+            </button>
+          </div>
+        )}
+      </div>
+    </motion.div>
+  );
 }

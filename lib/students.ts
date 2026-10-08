@@ -53,7 +53,11 @@ export interface StudentProfile {
   checkedAt: string;
 }
 
-export async function studentSignIn(input: { studentId: string; firstName: string; lastName: string }) {
+/**
+ * The name is enough. A Student ID or a phone number is only needed when two
+ * students share a name — the server says so, and the form then asks for one.
+ */
+export async function studentSignIn(input: { firstName: string; lastName: string; studentId?: string; phone?: string }) {
   return api.post<StudentProfile>("/students/sign-in", input);
 }
 

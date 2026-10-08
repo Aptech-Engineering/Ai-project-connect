@@ -21,19 +21,41 @@ final class Students
         return Database::one('SELECT * FROM students WHERE id = ?', [$id]);
     }
 
-    /** Sign-in: the Student ID with the names that go with it. Case and spacing are forgiven. */
-    public static function bySignIn(string $studentId, string $firstName, string $lastName): ?array
+    /**
+     * Sign-in. The name is what a student always has on them; the Student ID is only
+     * needed when two of them share a name, which is why it is optional.
+     *
+     * Case, spacing and the order of the two names are all forgiven.
+     *
+     * @return list<array<string, mixed>> everyone who matches: none, one, or namesakes
+     */
+    public static function matching(?string $studentId, string $firstName, string $lastName, ?string $phone = null): array
     {
-        $row = Database::one('SELECT * FROM students WHERE student_id = ? AND active = 1', [self::normaliseId($studentId)]);
-        if ($row === null) {
-            return null;
-        }
-        $same = static fn (string $a, string $b): bool => self::loose($a) === self::loose($b);
-        // Either way round: plenty of people give their surname first.
-        $straight = $same($row['first_name'], $firstName) && $same($row['last_name'], $lastName);
-        $swapped = $same($row['first_name'], $lastName) && $same($row['last_name'], $firstName);
+        $rows = $studentId !== null && trim($studentId) !== ''
+            ? Database::all('SELECT * FROM students WHERE student_id = ? AND active = 1', [self::normaliseId($studentId)])
+            : Database::all('SELECT * FROM students WHERE active = 1');
 
-        return $straight || $swapped ? $row : null;
+        $same = static fn (string $a, string $b): bool => self::loose($a) === self::loose($b);
+        $rows = array_values(array_filter($rows, static function (array $row) use ($same, $firstName, $lastName) {
+            // Either way round: plenty of people give their surname first.
+            return ($same($row['first_name'], $firstName) && $same($row['last_name'], $lastName))
+                || ($same($row['first_name'], $lastName) && $same($row['last_name'], $firstName));
+        }));
+
+        // A phone number tells namesakes apart as well as an ID does, and more people
+        // know it by heart. The last 7 digits, so 0803… and +234 803… both match.
+        if (count($rows) > 1 && $phone !== null && trim($phone) !== '') {
+            $tail = static fn (?string $value): string => substr(preg_replace('/\D/', '', (string) $value) ?? '', -7);
+            $wanted = $tail($phone);
+            if ($wanted !== '') {
+                $narrowed = array_values(array_filter($rows, static fn ($row) => $tail($row['phone']) === $wanted));
+                if ($narrowed !== []) {
+                    return $narrowed;
+                }
+            }
+        }
+
+        return $rows;
     }
 
     /** The phone remembers this instead of the name, so a refresh is one tap. */

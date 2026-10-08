@@ -21,24 +21,41 @@ use App\Support\Students;
  */
 final class StudentsController
 {
-    /** Signing in: Student ID plus first and last name. */
+    /**
+     * Signing in. The name is enough on its own; the Student ID is only asked for
+     * when it has to be, because plenty of students do not know theirs by heart.
+     */
     public static function signIn(Request $r): void
     {
         RateLimiter::hit('student-signin:' . $r->ip(), 60, 3600);
         $data = Validator::validate($r->input(), [
-            'studentId' => 'required|string|max:30',
-            'firstName' => 'required|string|max:80',
-            'lastName' => 'required|string|max:80',
+            'studentId' => 'nullable|string|max:30',
+            'firstName' => 'required|string|min:2|max:80',
+            'lastName' => 'required|string|min:2|max:80',
+            'phone' => 'nullable|string|max:40',
         ]);
 
-        $student = Students::bySignIn($data['studentId'], $data['firstName'], $data['lastName']);
-        if ($student === null) {
-            // Guessing a name against an ID should get slow quickly.
+        $matches = Students::matching($data['studentId'] ?? null, $data['firstName'], $data['lastName'], $data['phone'] ?? null);
+
+        if ($matches === []) {
+            // Guessing names should get slow quickly.
             RateLimiter::hit('student-signin-miss:' . $r->ip(), 15, 3600);
-            throw HttpError::notFound('We could not find that Student ID with those names. Check them with the office.');
+            throw HttpError::notFound(
+                ($data['studentId'] ?? '') !== ''
+                    ? 'That Student ID does not go with those names. Check them with the office.'
+                    : 'We could not find that name on the register. Check the spelling, or ask at the front desk.',
+            );
         }
 
-        Response::json(self::payload($student));
+        if (count($matches) > 1) {
+            // Namesakes. One more detail settles it, and either will do.
+            throw HttpError::validation(
+                ['studentId' => 'Enter your Student ID, or the phone number on your record.'],
+                'More than one student has that name.',
+            );
+        }
+
+        Response::json(self::payload($matches[0]));
     }
 
     /** Refreshing: the phone sends the token it was given instead of the name. */
