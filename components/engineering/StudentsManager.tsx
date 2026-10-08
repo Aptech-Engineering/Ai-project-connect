@@ -3,26 +3,24 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   BadgeCheck,
+  CalendarClock,
   Check,
   ChevronDown,
   Copy,
   Loader2,
-  Plus,
   RotateCw,
   Search,
   Smartphone,
   Trash2,
   TriangleAlert,
   UserPlus,
-  Wallet,
 } from "lucide-react";
 import { errorMessage } from "@/lib/api";
 import {
   createStudent,
   deleteStudent,
-  deleteStudentPayment,
+  resetClearance,
   loadStudent,
-  recordStudentPayment,
   updateStudent,
   useStudents,
   type Student,
@@ -34,21 +32,15 @@ import type { Notify } from "../PortalApp";
 
 const card = "rounded-2xl border border-line bg-white p-5 shadow-sm";
 const input = "h-10 w-full rounded-lg border border-line px-3 text-sm outline-none focus:border-brand";
-const naira = (n: number) => "₦" + new Intl.NumberFormat("en-NG", { maximumFractionDigits: 0 }).format(n);
+type Filter = "all" | "cleared" | "not-cleared";
 
-type Filter = "all" | "cleared" | "owing" | "plan" | "blocked";
-
-const STANDINGS: { value: Student["standing"]; label: string; hint: string }[] = [
-  { value: "AUTO", label: "The balance decides", hint: "Cleared once the fee is fully paid." },
-  { value: "DISCUSSION", label: "Payment discussion ongoing", hint: "Shown as a discussion, not simply unpaid." },
-  { value: "BLOCKED", label: "Keep out", hint: "Never cleared, whatever the balance says." },
-  { value: "WAIVED", label: "Fees waived", hint: "Always cleared. Nothing to pay." },
+const STANDINGS: { value: "WAIVED" | "BLOCKED"; label: string; hint: string }[] = [
+  { value: "WAIVED", label: "Cleared", hint: "Allow this student to enter." },
+  { value: "BLOCKED", label: "Not cleared", hint: "Do not allow entry." },
 ];
 
 /**
- * "Students" in the Engineering Panel. The register a counsellor keeps: who is
- * enrolled, what each one owes, and every payment as it comes in. It is the same
- * record the student sees on their phone at the gate.
+ * Student register. Counsellors can onboard students; admins manage records and gate clearance.
  */
 export default function StudentsManager({ notify }: { notify: Notify }) {
   const me = useStaff();
@@ -64,10 +56,8 @@ export default function StudentsManager({ notify }: { notify: Notify }) {
     return students.filter((s) => {
       const matchesFilter =
         filter === "all" ||
-        (filter === "cleared" && s.verdict.allowed && s.verdict.state !== "ON_PLAN") ||
-        (filter === "owing" && !s.verdict.allowed) ||
-        (filter === "plan" && s.standing === "DISCUSSION") ||
-        (filter === "blocked" && s.standing === "BLOCKED");
+        (filter === "cleared" && s.verdict.allowed) ||
+        (filter === "not-cleared" && !s.verdict.allowed);
       if (!matchesFilter) return false;
       if (!needle) return true;
       return [s.name, s.studentId, s.phone, s.email, s.course, s.batch].some((v) => (v ?? "").toLowerCase().includes(needle));
@@ -98,7 +88,7 @@ export default function StudentsManager({ notify }: { notify: Notify }) {
       <div className="mb-5">
         <h1 className="font-display text-2xl font-bold">Students</h1>
         <p className="text-sm text-muted">
-          Every student, their fee and what they have paid. Each one opens{" "}
+          Student records and gate clearance. Each student opens{" "}
           <span className="font-mono text-navy">/student</span> on their phone and shows it at the gate.
         </p>
       </div>
@@ -107,8 +97,9 @@ export default function StudentsManager({ notify }: { notify: Notify }) {
         <Stat label="Students" value={String(stats.total)} />
         <Stat label="Cleared to enter" value={String(stats.cleared)} tone="teal" />
         <Stat label="Not cleared" value={String(stats.owing)} tone={stats.owing > 0 ? "brand" : undefined} />
-        <Stat label="Collected" value={naira(stats.collected)} hint={`${naira(stats.outstanding)} outstanding`} tone="teal" />
       </div>
+
+      {me.role === "admin" && <NewMonth cleared={stats.cleared} notify={notify} />}
 
       <ShareLink page={data.page} notify={notify} />
 
@@ -127,9 +118,7 @@ export default function StudentsManager({ notify }: { notify: Notify }) {
           [
             ["all", `All (${students.length})`],
             ["cleared", "Cleared"],
-            ["owing", "Not cleared"],
-            ["plan", "On a plan"],
-            ["blocked", "Kept out"],
+            ["not-cleared", "Not cleared"],
           ] as [Filter, string][]
         ).map(([key, label]) => (
           <button
@@ -187,6 +176,69 @@ function Stat({ label, value, hint, tone }: { label: string; value: string; hint
   );
 }
 
+/**
+ * Clearance runs monthly, so there is one button for the turn of the month rather
+ * than a trip through every student. It asks first, and says exactly how many it
+ * is about to affect.
+ */
+function NewMonth({ cleared, notify }: { cleared: number; notify: Notify }) {
+  const [asking, setAsking] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  if (cleared === 0 && !asking) return null;
+
+  return (
+    <div className="mt-3 flex flex-wrap items-center gap-3 rounded-2xl border border-line bg-white px-4 py-3 shadow-sm">
+      <CalendarClock className="size-4 shrink-0 text-brand" />
+      {asking ? (
+        <>
+          <p className="text-sm text-navy">
+            Set <span className="font-bold">{cleared}</span> cleared {cleared === 1 ? "student" : "students"} back to{" "}
+            <span className="font-bold">not cleared</span> for the new month? Clear them again as they pay.
+          </p>
+          <div className="ml-auto flex gap-2">
+            <button
+              onClick={async () => {
+                if (busy) return;
+                setBusy(true);
+                try {
+                  const n = await resetClearance();
+                  notify(`New month started. ${n} ${n === 1 ? "student is" : "students are"} now not cleared.`);
+                  setAsking(false);
+                } catch (e) {
+                  notify(errorMessage(e), "info");
+                } finally {
+                  setBusy(false);
+                }
+              }}
+              disabled={busy}
+              className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-navy px-3 py-1.5 text-xs font-bold text-white disabled:opacity-50"
+            >
+              {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}
+              Yes, start the new month
+            </button>
+            <button onClick={() => setAsking(false)} className="cursor-pointer px-2 py-1.5 text-xs font-bold text-muted">
+              Cancel
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          <p className="text-sm text-muted">
+            Clearance is monthly. At the turn of the month, put everyone back to not cleared and clear them again as they pay.
+          </p>
+          <button
+            onClick={() => setAsking(true)}
+            className="ml-auto cursor-pointer rounded-lg border border-line px-3 py-1.5 text-xs font-bold text-navy hover:border-brand"
+          >
+            Start a new month
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
 function ShareLink({ page, notify }: { page: string; notify: Notify }) {
   const [copied, setCopied] = useState(false);
   return (
@@ -236,9 +288,7 @@ function AddStudent({
     email: "",
     course: "",
     batch: "",
-    fee: "",
     startedOn: "",
-    dueOn: "",
   });
   const set = (patch: Partial<typeof form>) => setForm((f) => ({ ...f, ...patch }));
   const valid = form.firstName.trim().length > 1 && form.lastName.trim().length > 1;
@@ -256,9 +306,7 @@ function AddStudent({
         email: form.email.trim(),
         course: form.course.trim(),
         batch: form.batch.trim(),
-        fee: form.fee === "" ? 0 : Number(form.fee),
         startedOn: form.startedOn || null,
-        dueOn: form.dueOn || null,
       });
       notify(`${student.name} added — Student ID ${student.studentId}.`);
       onAdded(student.id);
@@ -278,10 +326,6 @@ function AddStudent({
           Student ID
           <input value={form.studentId} onChange={(e) => set({ studentId: e.target.value })} className={cn(input, "mt-1 font-mono")} />
           <span className="mt-1 block font-sans text-[11px] font-normal text-muted">This is what they type to sign in. Change it if you use your own numbering.</span>
-        </label>
-        <label className="text-xs font-bold text-navy">
-          Course fee (₦)
-          <input type="number" min={0} value={form.fee} onChange={(e) => set({ fee: e.target.value })} placeholder="250000" className={cn(input, "mt-1")} />
         </label>
         <label className="text-xs font-bold text-navy">
           First name
@@ -310,10 +354,6 @@ function AddStudent({
         <label className="text-xs font-bold text-navy">
           Started on
           <input type="date" value={form.startedOn} onChange={(e) => set({ startedOn: e.target.value })} className={cn(input, "mt-1")} />
-        </label>
-        <label className="text-xs font-bold text-navy">
-          Balance due by
-          <input type="date" value={form.dueOn} onChange={(e) => set({ dueOn: e.target.value })} className={cn(input, "mt-1")} />
         </label>
       </div>
       <div className="mt-4 flex gap-2">
@@ -344,7 +384,6 @@ function StudentRow({
   isAdmin: boolean;
   notify: Notify;
 }) {
-  const share = student.fee > 0 ? Math.min(100, Math.round((student.paid / student.fee) * 100)) : 100;
   const chip =
     student.verdict.tone === "green"
       ? "bg-teal-soft text-teal-700"
@@ -367,18 +406,6 @@ function StudentRow({
           </p>
         </div>
 
-        <div className="min-w-[11rem] flex-1">
-          <div className="flex items-baseline justify-between text-xs">
-            <span className="font-bold text-navy">
-              {naira(student.paid)} <span className="font-normal text-muted">of {naira(student.fee)}</span>
-            </span>
-            {student.outstanding > 0 && <span className="font-bold text-danger">{naira(student.outstanding)} left</span>}
-          </div>
-          <div className="mt-1.5 h-2 overflow-hidden rounded-full bg-mist" role="img" aria-label={`${share}% paid`}>
-            <div className={cn("h-full rounded-full", share >= 100 ? "bg-teal" : share > 0 ? "bg-brand" : "bg-line")} style={{ width: `${share}%` }} />
-          </div>
-        </div>
-
         <span className={cn("rounded-lg px-2.5 py-1 text-xs font-bold", chip)}>{student.verdict.headline}</span>
         <ChevronDown className={cn("size-4 text-muted transition", open && "rotate-180")} />
       </button>
@@ -392,7 +419,6 @@ function StudentDetail({ student, isAdmin, notify }: { student: Student; isAdmin
   const [busy, setBusy] = useState(false);
   const [row, setRow] = useState<Student>(student);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [payment, setPayment] = useState({ amount: "", method: "cash", reference: "", paidOn: new Date().toISOString().slice(0, 10), note: "" });
   const [details, setDetails] = useState({
     studentId: student.studentId,
     firstName: student.firstName,
@@ -401,16 +427,13 @@ function StudentDetail({ student, isAdmin, notify }: { student: Student; isAdmin
     email: student.email ?? "",
     course: student.course ?? "",
     batch: student.batch ?? "",
-    fee: String(student.fee),
     gateNote: student.gateNote ?? "",
     note: student.note ?? "",
-    dueOn: student.dueOn ?? "",
   });
 
-  // The list leaves payments out, so the row fetches the full record when it opens,
-  // and follows the list again whenever the panel refreshes behind it.
+  // Follow the list whenever the panel refreshes behind the open record.
   useEffect(() => {
-    setRow((current) => ({ ...student, payments: current.payments }));
+    setRow(student);
   }, [student]);
 
   useEffect(() => {
@@ -437,23 +460,6 @@ function StudentDetail({ student, isAdmin, notify }: { student: Student; isAdmin
     }
   };
 
-  const addPayment = async () => {
-    const amount = Number(payment.amount);
-    if (!amount || amount <= 0) return;
-    await run(
-      () =>
-        recordStudentPayment(student.id, {
-          amount,
-          method: payment.method as "cash",
-          reference: payment.reference.trim() || undefined,
-          paidOn: payment.paidOn || undefined,
-          note: payment.note.trim() || undefined,
-        }),
-      `${naira(amount)} recorded for ${student.name}.`,
-    );
-    setPayment({ ...payment, amount: "", reference: "", note: "" });
-  };
-
   const saveDetails = () =>
     run(
       () =>
@@ -465,15 +471,11 @@ function StudentDetail({ student, isAdmin, notify }: { student: Student; isAdmin
           email: details.email.trim(),
           course: details.course.trim(),
           batch: details.batch.trim(),
-          fee: details.fee === "" ? 0 : Number(details.fee),
           gateNote: details.gateNote.trim(),
           note: details.note.trim(),
-          dueOn: details.dueOn || null,
         } satisfies StudentPatch),
       "Record updated. Their phone shows it straight away.",
     );
-
-  const payments = row.payments ?? student.payments ?? [];
 
   return (
     <div className={cn("space-y-4 border-t border-line p-4", busy && "opacity-70")}>
@@ -491,75 +493,17 @@ function StudentDetail({ student, isAdmin, notify }: { student: Student; isAdmin
         </span>
       </div>
 
-      {/* money in */}
-      <div className="rounded-xl border border-line bg-mist/40 p-4">
-        <p className="font-display text-sm font-bold text-navy">
-          <Wallet className="mr-1.5 inline size-4 text-brand" /> Record a payment
-        </p>
-        <div className="mt-2 grid gap-2 sm:grid-cols-[8rem_8rem_9rem_1fr_auto]">
-          <input
-            type="number"
-            min={1}
-            value={payment.amount}
-            onChange={(e) => setPayment({ ...payment, amount: e.target.value })}
-            placeholder="Amount ₦"
-            className={input}
-            aria-label="Amount"
-          />
-          <select value={payment.method} onChange={(e) => setPayment({ ...payment, method: e.target.value })} className={input} aria-label="How they paid">
-            <option value="cash">Cash</option>
-            <option value="transfer">Transfer</option>
-            <option value="pos">POS</option>
-            <option value="paystack">Paystack</option>
-            <option value="other">Other</option>
-          </select>
-          <input type="date" value={payment.paidOn} onChange={(e) => setPayment({ ...payment, paidOn: e.target.value })} className={input} aria-label="Date paid" />
-          <input
-            value={payment.reference}
-            onChange={(e) => setPayment({ ...payment, reference: e.target.value })}
-            placeholder="Teller or reference (optional)"
-            className={input}
-          />
-          <button
-            onClick={() => void addPayment()}
-            disabled={busy || !payment.amount}
-            aria-label="Record the payment"
-            className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-navy px-4 text-sm font-bold text-white disabled:opacity-40"
-          >
-            <Plus className="size-4" /> Add
-          </button>
-        </div>
-
-        {payments.length > 0 && (
-          <ul className="mt-3 divide-y divide-line border-t border-line">
-            {payments.map((p) => (
-              <li key={p.id} className="flex flex-wrap items-center gap-2 py-2 text-sm">
-                <span className="font-bold text-navy">{naira(p.amount)}</span>
-                <span className="text-xs text-muted">{p.method}</span>
-                <span className="text-xs text-muted">{new Date(p.paidOn + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}</span>
-                {p.reference && <span className="font-mono text-xs text-muted">{p.reference}</span>}
-                {p.recordedBy && <span className="text-xs text-muted">by {p.recordedBy}</span>}
-                <button
-                  onClick={() => void run(() => deleteStudentPayment(student.id, p.id!), "Payment removed.")}
-                  aria-label={`Remove the payment of ${naira(p.amount)}`}
-                  className="ml-auto cursor-pointer rounded-lg px-2 py-1 text-muted hover:bg-danger-soft hover:text-danger"
-                >
-                  <Trash2 className="size-3.5" />
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-
       {/* what the gate should do */}
       <div className="rounded-xl border border-line bg-mist/40 p-4">
         <p className="font-display text-sm font-bold text-navy">At the gate</p>
         <div className="mt-2 grid gap-2 sm:grid-cols-2">
-          {STANDINGS.map((s) => (
+          {isAdmin && STANDINGS.map((s) => (
             <button
               key={s.value}
               onClick={() => void run(() => updateStudent(student.id, { standing: s.value }), `${student.name}: ${s.label.toLowerCase()}.`)}
+              // The filter chips above carry the same words; this says which button it is.
+              aria-label={`Mark ${student.name} as ${s.label.toLowerCase()}`}
+              aria-pressed={row.standing === s.value}
               className={cn(
                 "cursor-pointer rounded-xl border p-3 text-left transition",
                 row.standing === s.value ? "border-navy bg-white shadow-sm" : "border-line bg-white/60 hover:border-brand",
@@ -570,48 +514,32 @@ function StudentDetail({ student, isAdmin, notify }: { student: Student; isAdmin
             </button>
           ))}
         </div>
+        {!isAdmin && <p className="mt-2 text-xs text-muted">Only an admin can change this clearance status.</p>}
 
-        {row.standing === "DISCUSSION" && (
-          <label className="mt-3 flex cursor-pointer items-start gap-2 rounded-xl border border-line bg-white p-3 text-sm">
-            <input
-              type="checkbox"
-              checked={row.gatePass}
-              onChange={(e) => void run(() => updateStudent(student.id, { gatePass: e.target.checked }), e.target.checked ? "They may come in while the plan runs." : "They are not cleared to come in.")}
-              className="mt-0.5"
-            />
-            <span>
-              <span className="font-bold text-navy">Let them in while the plan runs</span>
-              <span className="block text-xs text-muted">Their pass turns amber and reads &ldquo;Cleared — on a plan&rdquo;, with the balance still shown.</span>
-            </span>
-          </label>
-        )}
-
-        <label className="mt-3 block text-xs font-bold text-navy">
+        {isAdmin && <label className="mt-3 block text-xs font-bold text-navy">
           A line for the student and the guard
           <input
             value={details.gateNote}
             onChange={(e) => setDetails({ ...details, gateNote: e.target.value })}
-            placeholder="Paying ₦20,000 on Friday"
+            placeholder="Any note the student or gate staff should see"
             className={cn(input, "mt-1")}
           />
-        </label>
+        </label>}
       </div>
 
       {/* their details */}
       <div className="rounded-xl border border-line bg-mist/40 p-4">
         <p className="font-display text-sm font-bold text-navy">Their details</p>
-        <div className="mt-2 grid gap-2 sm:grid-cols-2">
+        {isAdmin ? <div className="mt-2 grid gap-2 sm:grid-cols-2">
           <Field label="Student ID" value={details.studentId} onChange={(v) => setDetails({ ...details, studentId: v })} mono />
-          <Field label="Course fee (₦)" value={details.fee} onChange={(v) => setDetails({ ...details, fee: v })} type="number" />
           <Field label="First name" value={details.firstName} onChange={(v) => setDetails({ ...details, firstName: v })} />
           <Field label="Last name" value={details.lastName} onChange={(v) => setDetails({ ...details, lastName: v })} />
           <Field label="Phone" value={details.phone} onChange={(v) => setDetails({ ...details, phone: v })} />
           <Field label="Email" value={details.email} onChange={(v) => setDetails({ ...details, email: v })} />
           <Field label="Course" value={details.course} onChange={(v) => setDetails({ ...details, course: v })} />
           <Field label="Class or batch" value={details.batch} onChange={(v) => setDetails({ ...details, batch: v })} />
-          <Field label="Balance due by" value={details.dueOn} onChange={(v) => setDetails({ ...details, dueOn: v })} type="date" />
-        </div>
-        <label className="mt-2 block text-xs font-bold text-navy">
+        </div> : <p className="mt-2 text-sm text-muted">{row.name} · {row.studentId}{row.phone ? ` · ${row.phone}` : ""}{row.email ? ` · ${row.email}` : ""}</p>}
+        {isAdmin && <label className="mt-2 block text-xs font-bold text-navy">
           Internal note <span className="font-sans font-normal text-muted">— staff only, the student never sees it</span>
           <textarea
             value={details.note}
@@ -619,9 +547,9 @@ function StudentDetail({ student, isAdmin, notify }: { student: Student; isAdmin
             rows={2}
             className="mt-1 w-full rounded-lg border border-line px-3 py-2 text-sm outline-none focus:border-brand"
           />
-        </label>
+        </label>}
 
-        <div className="mt-3 flex flex-wrap items-center gap-2">
+        {isAdmin && <div className="mt-3 flex flex-wrap items-center gap-2">
           <button
             onClick={() => void saveDetails()}
             disabled={busy}
@@ -640,7 +568,7 @@ function StudentDetail({ student, isAdmin, notify }: { student: Student; isAdmin
             (confirmDelete ? (
               <>
                 <button
-                  onClick={() => void run(() => deleteStudent(student.id), `${student.name} deleted, with their payment history.`)}
+                  onClick={() => void run(() => deleteStudent(student.id), `${student.name} deleted.`)}
                   className="cursor-pointer rounded-lg bg-danger px-3 py-2 text-sm font-bold text-white"
                 >
                   Delete for good
@@ -657,8 +585,8 @@ function StudentDetail({ student, isAdmin, notify }: { student: Student; isAdmin
                 <Trash2 className="mr-1.5 inline size-3.5" /> Delete
               </button>
             ))}
-        </div>
-        {confirmDelete && <p className="mt-2 text-xs text-danger">This removes the student and every payment recorded against them. It cannot be undone.</p>}
+        </div>}
+        {confirmDelete && <p className="mt-2 text-xs text-danger">This removes the student record. It cannot be undone.</p>}
       </div>
     </div>
   );

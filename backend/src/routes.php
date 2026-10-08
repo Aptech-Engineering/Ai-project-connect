@@ -196,12 +196,11 @@ return static function (Router $r): void {
     $r->delete('/api/staff/scholarship/batches/{id}', [ScholarshipAdmin::class, 'deleteBatch']);
     /* ---------- the student register ---------- */
     $r->get('/api/staff/students', [StudentsAdmin::class, 'index']);
+    $r->post('/api/staff/students/clearance/reset', [StudentsAdmin::class, 'resetClearance']);
     $r->post('/api/staff/students', [StudentsAdmin::class, 'store']);
     $r->get('/api/staff/students/{id}', [StudentsAdmin::class, 'show']);
     $r->patch('/api/staff/students/{id}', [StudentsAdmin::class, 'update']);
     $r->delete('/api/staff/students/{id}', [StudentsAdmin::class, 'destroy']);
-    $r->post('/api/staff/students/{id}/payments', [StudentsAdmin::class, 'addPayment']);
-    $r->delete('/api/staff/students/{id}/payments/{paymentId}', [StudentsAdmin::class, 'deletePayment']);
 
     $r->post('/api/staff/scholarship/partners', [ScholarshipAdmin::class, 'createPartner']);
     $r->patch('/api/staff/scholarship/partners/{id}', [ScholarshipAdmin::class, 'updatePartner']);

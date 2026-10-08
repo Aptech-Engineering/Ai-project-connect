@@ -116,6 +116,7 @@ Run the migrations in `database/migrations/` that you haven't run yet, in name o
 | `2026_09_analytics.sql` | Analytics: `analytics_events`, `analytics_sessions`, `analytics_visitors`, `analytics_daily`, `project_stage_history` (back-filled from existing stage updates), `api_request_log`, `analytics_saved_views`, `analytics_schedules`, `users.can_view_analytics`, `leads.contacted_at` / `enrolled_at` (back-filled from `updated_at`), `notifications.html_body` / `attachments`. Then add the analytics cron jobs below. |
 | `2026_09_settings.sql` | The `settings` table behind Engineering Panel → Settings. After importing it, enter your Paystack keys and bank details there: they are no longer read from `config.php` or the website content document. |
 | `2026_09_wallet.sql` | Draft applications (`ideas.status = DRAFT`, nullable form fields, `source`, `last_saved_at`, `submitted_at`), `idea_resume_tokens`, `idea_payments`. Ideas already in the inbox have no commitment fee, so quotes/conversion are blocked for them until a fee is recorded — the file has an optional statement to exempt them. |
+| `2026_10_students_clearance.sql` | Converts existing student pass statuses from fee/payment-derived results to saved admin decisions, preserving students who were already cleared. Run after `2026_10_students.sql`. |
 
 ## Deploy to Nairahost (cPanel)
 

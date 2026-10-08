@@ -777,7 +777,8 @@ SELECT 1,
        1
 WHERE NOT EXISTS (SELECT 1 FROM scholarship_programme WHERE id = 1);
 
--- Students and their fees (see migrations/2026_10_students.sql).
+-- Student pass register (see migrations/2026_10_students.sql). Fee/payment columns
+-- remain for compatibility with existing databases; the pass no longer uses them.
 CREATE TABLE IF NOT EXISTS students (
   id            INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   -- What the student types to sign in, e.g. APC/26/0001.
@@ -788,16 +789,12 @@ CREATE TABLE IF NOT EXISTS students (
   email         VARCHAR(190) NULL,
   course        VARCHAR(160) NULL,
   batch         VARCHAR(80) NULL,
-  -- The whole fee for the course. Payments are counted against it.
+  -- Legacy billing fields; student course fees are managed elsewhere.
   fee_kobo      BIGINT UNSIGNED NOT NULL DEFAULT 0,
   currency      CHAR(3) NOT NULL DEFAULT 'NGN',
-  -- What a counsellor has decided, over and above the arithmetic:
-  --   AUTO       the balance decides
-  --   DISCUSSION a payment plan is being worked out
-  --   BLOCKED    keep them out whatever the balance says
-  --   WAIVED     nothing to pay
+  -- Admin-controlled gate decision: BLOCKED = not cleared, WAIVED = cleared.
   standing      ENUM('AUTO','DISCUSSION','BLOCKED','WAIVED') NOT NULL DEFAULT 'AUTO',
-  -- Let them through the gate while a plan runs, even though they still owe.
+  -- Legacy field; retained for existing databases.
   gate_pass     TINYINT(1) NOT NULL DEFAULT 0,
   -- A line the student and the guard both see, e.g. "Paying ₦20,000 on Friday".
   gate_note     VARCHAR(255) NULL,

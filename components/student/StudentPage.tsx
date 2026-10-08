@@ -12,9 +12,6 @@ import AptechMark from "../AptechMark";
 /** The phone remembers who it belongs to, and the last answer it was given. */
 const STORE = "apc.student.v1";
 
-const money = (amount: number, currency = "NGN") =>
-  (currency === "NGN" ? "₦" : currency + " ") + new Intl.NumberFormat("en-NG", { maximumFractionDigits: 0 }).format(amount);
-
 interface Saved {
   studentId: string;
   token: string;
@@ -348,7 +345,7 @@ function GateCard({
           <AptechMark height="h-6" className="ml-auto" />
         </div>
 
-        {/* Everything the guard needs, in one glance. */}
+        {/* The admin-controlled gate decision, in one glance. */}
         <section className={cn("mt-5 overflow-hidden rounded-3xl shadow-2xl", tone.card, tone.text)} aria-live="polite">
           <div className="px-5 pb-5 pt-6 text-center">
             <tone.Icon className="mx-auto size-10 opacity-90" aria-hidden />
@@ -392,44 +389,6 @@ function GateCard({
           {busy ? "Checking…" : "Check again now"}
         </button>
 
-        {/* The money, for the student rather than the guard. */}
-        <section className="mt-4 rounded-2xl bg-white/5 p-4 ring-1 ring-white/10">
-          <div className="grid grid-cols-3 gap-2 text-center">
-            <Figure label="Course fee" value={money(profile.fee, profile.currency)} />
-            <Figure label="Paid" value={money(profile.paid, profile.currency)} tone="text-emerald-300" />
-            <Figure
-              label="Outstanding"
-              value={money(profile.outstanding, profile.currency)}
-              tone={profile.outstanding > 0 ? "text-red-300" : "text-emerald-300"}
-            />
-          </div>
-          {profile.dueOn && profile.outstanding > 0 && (
-            <p className="mt-3 border-t border-white/10 pt-3 text-center text-xs text-white/60">
-              Balance due by {new Date(profile.dueOn + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })}
-            </p>
-          )}
-        </section>
-
-        {profile.payments.length > 0 && (
-          <section className="mt-4 rounded-2xl bg-white/5 p-4 ring-1 ring-white/10">
-            <p className="text-xs font-bold uppercase tracking-wider text-white/50">Your payments</p>
-            <ul className="mt-2 divide-y divide-white/10">
-              {profile.payments.map((p, i) => (
-                <li key={i} className="flex items-center justify-between py-2 text-sm">
-                  <span>
-                    <span className="font-bold">{money(p.amount, profile.currency)}</span>
-                    <span className="ml-2 text-xs text-white/50">{p.method}</span>
-                  </span>
-                  <span className="text-xs text-white/60">
-                    {new Date(p.paidOn + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}
-                  </span>
-                </li>
-              ))}
-            </ul>
-            <p className="mt-2 text-[11px] text-white/40">If a payment is missing here, show your receipt at the front desk.</p>
-          </section>
-        )}
-
         {!installed && install.state !== "none" && (
           <button
             onClick={() => setSheet(true)}
@@ -461,15 +420,6 @@ function GateCard({
         )}
       </AnimatePresence>
     </main>
-  );
-}
-
-function Figure({ label, value, tone }: { label: string; value: string; tone?: string }) {
-  return (
-    <div>
-      <p className="text-[10px] font-bold uppercase tracking-wider text-white/45">{label}</p>
-      <p className={cn("mt-0.5 font-display text-base font-bold", tone)}>{value}</p>
-    </div>
   );
 }
 

@@ -16,7 +16,7 @@ use App\Support\Students;
  * The student's own page at /student. No password: their Student ID and their name
  * open it, and their phone keeps a token afterwards so a refresh is one tap.
  *
- * It holds nothing worth stealing — a name, a course and a balance — and it has to
+ * It holds only a name, a course and a clearance status — and it has to
  * work in a queue at the gate on a bad line, which is why it is this light.
  */
 final class StudentsController
@@ -82,6 +82,6 @@ final class StudentsController
         // So a counsellor can see who is actually using the page.
         Database::run('UPDATE students SET last_seen_at = NOW() WHERE id = ?', [(int) $student['id']]);
 
-        return Students::presentForStudent($student, Students::paidKobo((int) $student['id']));
+        return Students::presentForStudent($student);
     }
 }
