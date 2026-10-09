@@ -6,6 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "build:prod": "node scripts/build-prod.mjs",
+    "sync:pdf-worker": "node -e \"require('fs').copyFileSync('node_modules/pdfjs-dist/build/pdf.worker.min.mjs', 'public/pdf.worker.min.mjs')\"",
     "start": "next start",
     "serve": "node scripts/serve-static.mjs out 3000"
   },
@@ -15,9 +16,11 @@
     "jspdf": "^4.2.1",
     "lucide-react": "^1.46.0",
     "next": "^15.5.25",
+    "pdfjs-dist": "^6.4.299",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
-    "recharts": "^3.10.1"
+    "recharts": "^3.10.1",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.3.3",

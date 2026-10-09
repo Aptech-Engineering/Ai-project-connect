@@ -36,6 +36,12 @@ Options -Indexes
     RewriteRule ^ - [R=404,L]
 </IfModule>
 
+# Apache does not know .mjs by default, and a module script served as plain text
+# is refused by the browser. The PDF reader on the Students screen is one.
+<IfModule mod_mime.c>
+    AddType text/javascript .mjs
+</IfModule>
+
 <IfModule mod_headers.c>
     Header always set X-Content-Type-Options "nosniff"
     Header always set Referrer-Policy "strict-origin-when-cross-origin"

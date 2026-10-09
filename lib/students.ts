@@ -121,6 +121,31 @@ export async function resetClearance() {
   return result.reset;
 }
 
+/** Clear or un-clear everyone ticked on the register. Admins only. */
+export async function setClearance(ids: number[], standing: "WAIVED" | "BLOCKED") {
+  const result = await api.post<{ updated: number; standing: string }>(`${STAFF_KEY}/clearance`, { ids, standing });
+  await invalidate(STAFF_KEY);
+  return result.updated;
+}
+
+/** One row of a spreadsheet or PDF, after the browser has read it. */
+export interface ImportRow {
+  firstName: string;
+  lastName: string;
+  studentId?: string;
+  phone?: string;
+  email?: string;
+  course?: string;
+  batch?: string;
+}
+
+/** Brings a register in. Anyone already on it is skipped, never duplicated. */
+export async function importStudents(students: ImportRow[]) {
+  const result = await api.post<{ created: number; skipped: number; problems: string[] }>(`${STAFF_KEY}/import`, { students });
+  await invalidate(STAFF_KEY);
+  return result;
+}
+
 export async function deleteStudent(id: number) {
   await api.del(`${STAFF_KEY}/${id}`);
   await invalidate(STAFF_KEY);

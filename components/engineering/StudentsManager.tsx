@@ -5,6 +5,8 @@ import {
   BadgeCheck,
   CalendarClock,
   Check,
+  CheckSquare,
+  FileSpreadsheet,
   ChevronDown,
   Copy,
   Loader2,
@@ -20,6 +22,7 @@ import {
   createStudent,
   deleteStudent,
   resetClearance,
+  setClearance,
   loadStudent,
   updateStudent,
   useStudents,
@@ -29,6 +32,7 @@ import {
 import { useStaff } from "@/lib/staff";
 import { cn } from "@/lib/format";
 import type { Notify } from "../PortalApp";
+import StudentImport from "./StudentImport";
 
 const card = "rounded-2xl border border-line bg-white p-5 shadow-sm";
 const input = "h-10 w-full rounded-lg border border-line px-3 text-sm outline-none focus:border-brand";
@@ -48,7 +52,10 @@ export default function StudentsManager({ notify }: { notify: Notify }) {
   const [filter, setFilter] = useState<Filter>("all");
   const [q, setQ] = useState("");
   const [adding, setAdding] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [openId, setOpenId] = useState<number | null>(null);
+  // Ticked for a bulk clearance. Admins only; nobody else can act on it.
+  const [picked, setPicked] = useState<Set<number>>(new Set());
 
   const students = data?.students ?? [];
   const shown = useMemo(() => {
@@ -99,7 +106,19 @@ export default function StudentsManager({ notify }: { notify: Notify }) {
         <Stat label="Not cleared" value={String(stats.owing)} tone={stats.owing > 0 ? "brand" : undefined} />
       </div>
 
-      {me.role === "admin" && <NewMonth cleared={stats.cleared} notify={notify} />}
+      {me.role === "admin" &&
+        (picked.size > 0 ? (
+          <BulkBar
+            picked={picked}
+            onDone={(message) => {
+              setPicked(new Set());
+              if (message) notify(message);
+            }}
+            notify={notify}
+          />
+        ) : (
+          <NewMonth cleared={stats.cleared} notify={notify} />
+        ))}
 
       <ShareLink page={data.page} notify={notify} />
 
@@ -132,6 +151,25 @@ export default function StudentsManager({ notify }: { notify: Notify }) {
             {label}
           </button>
         ))}
+        {me.role === "admin" && shown.length > 0 && (
+          <button
+            onClick={() => {
+              const ids = shown.map((s) => s.id);
+              const allPicked = ids.every((id) => picked.has(id));
+              setPicked(allPicked ? new Set() : new Set(ids));
+            }}
+            className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl bg-mist px-3 py-2 text-sm font-bold text-muted hover:text-navy"
+          >
+            <CheckSquare className="size-4" />
+            {shown.every((s) => picked.has(s.id)) ? "Clear the ticks" : `Tick all ${shown.length}`}
+          </button>
+        )}
+        <button
+          onClick={() => setImporting(true)}
+          className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl border border-line bg-white px-4 py-2 text-sm font-bold text-navy hover:border-brand"
+        >
+          <FileSpreadsheet className="size-4 text-brand" /> Import
+        </button>
         <button
           onClick={() => setAdding(true)}
           className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl bg-brand px-4 py-2 text-sm font-bold text-white hover:bg-brand-600"
@@ -141,6 +179,7 @@ export default function StudentsManager({ notify }: { notify: Notify }) {
       </div>
 
       {adding && <AddStudent suggestedId={data.suggestedId} onClose={() => setAdding(false)} onAdded={setOpenId} notify={notify} />}
+      {importing && <StudentImport onClose={() => setImporting(false)} notify={notify} />}
 
       <div className="mt-4 space-y-2">
         {shown.length === 0 ? (
@@ -157,6 +196,14 @@ export default function StudentsManager({ notify }: { notify: Notify }) {
               open={openId === s.id}
               onToggle={() => setOpenId(openId === s.id ? null : s.id)}
               isAdmin={me.role === "admin"}
+              picked={picked.has(s.id)}
+              onPick={(on) =>
+                setPicked((current) => {
+                  const next = new Set(current);
+                  on ? next.add(s.id) : next.delete(s.id);
+                  return next;
+                })
+              }
               notify={notify}
             />
           ))
@@ -172,6 +219,59 @@ function Stat({ label, value, hint, tone }: { label: string; value: string; hint
       <p className="text-xs font-bold uppercase tracking-wider text-muted">{label}</p>
       <p className={cn("mt-1 font-display text-2xl font-bold", tone === "teal" && "text-teal-700", tone === "brand" && "text-brand-700")}>{value}</p>
       {hint && <p className="text-xs text-muted">{hint}</p>}
+    </div>
+  );
+}
+
+/**
+ * What to do with the students that are ticked. It takes the place of the monthly
+ * bar while anything is ticked, so the two never sit there competing.
+ */
+function BulkBar({ picked, onDone, notify }: { picked: Set<number>; onDone: (message?: string) => void; notify: Notify }) {
+  const [busy, setBusy] = useState<"WAIVED" | "BLOCKED" | null>(null);
+  const n = picked.size;
+
+  const apply = async (standing: "WAIVED" | "BLOCKED") => {
+    if (busy) return;
+    setBusy(standing);
+    try {
+      const updated = await setClearance([...picked], standing);
+      const wording = standing === "WAIVED" ? "cleared" : "not cleared";
+      onDone(`${updated} ${updated === 1 ? "student is" : "students are"} now ${wording}.`);
+    } catch (e) {
+      notify(errorMessage(e), "info");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div className="mt-3 flex flex-wrap items-center gap-3 rounded-2xl border border-navy bg-navy px-4 py-3 text-white shadow-sm">
+      <CheckSquare className="size-4 shrink-0" />
+      <p className="text-sm font-bold">
+        {n} {n === 1 ? "student" : "students"} ticked
+      </p>
+      <div className="ml-auto flex flex-wrap gap-2">
+        <button
+          onClick={() => void apply("WAIVED")}
+          disabled={busy !== null}
+          className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-teal px-3.5 py-1.5 text-xs font-bold text-white disabled:opacity-50"
+        >
+          {busy === "WAIVED" ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}
+          Mark cleared
+        </button>
+        <button
+          onClick={() => void apply("BLOCKED")}
+          disabled={busy !== null}
+          className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-danger px-3.5 py-1.5 text-xs font-bold text-white disabled:opacity-50"
+        >
+          {busy === "BLOCKED" ? <Loader2 className="size-3.5 animate-spin" /> : <TriangleAlert className="size-3.5" />}
+          Mark not cleared
+        </button>
+        <button onClick={() => onDone()} className="cursor-pointer px-2 py-1.5 text-xs font-bold text-white/60 hover:text-white">
+          Untick all
+        </button>
+      </div>
     </div>
   );
 }
@@ -376,12 +476,16 @@ function StudentRow({
   open,
   onToggle,
   isAdmin,
+  picked,
+  onPick,
   notify,
 }: {
   student: Student;
   open: boolean;
   onToggle: () => void;
   isAdmin: boolean;
+  picked: boolean;
+  onPick: (on: boolean) => void;
   notify: Notify;
 }) {
   const chip =
@@ -392,7 +496,19 @@ function StudentRow({
         : "bg-danger-soft text-danger";
 
   return (
-    <div className={cn("rounded-2xl border border-line bg-white shadow-sm", !student.active && "opacity-60")}>
+    <div className={cn("rounded-2xl border bg-white shadow-sm", picked ? "border-navy ring-1 ring-navy/20" : "border-line", !student.active && "opacity-60")}>
+      <div className="flex items-center">
+        {isAdmin && (
+          <label className="cursor-pointer py-4 pl-4 pr-1">
+            <input
+              type="checkbox"
+              checked={picked}
+              onChange={(e) => onPick(e.target.checked)}
+              aria-label={`Tick ${student.name} for a bulk change`}
+              className="size-4 cursor-pointer"
+            />
+          </label>
+        )}
       <button onClick={onToggle} className="flex w-full cursor-pointer flex-wrap items-center gap-3 p-4 text-left">
         <div className="min-w-[10rem] flex-1">
           <p className="font-display font-bold text-navy">
@@ -409,6 +525,7 @@ function StudentRow({
         <span className={cn("rounded-lg px-2.5 py-1 text-xs font-bold", chip)}>{student.verdict.headline}</span>
         <ChevronDown className={cn("size-4 text-muted transition", open && "rotate-180")} />
       </button>
+      </div>
 
       {open && <StudentDetail student={student} isAdmin={isAdmin} notify={notify} />}
     </div>

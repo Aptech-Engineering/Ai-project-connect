@@ -60,6 +60,112 @@ final class StudentsAdminController
         Response::json(['reset' => $affected]);
     }
 
+    /**
+     * Clear or un-clear a batch of students in one go. The admin ticks them on the
+     * register and presses one button; a hundred students is one request.
+     */
+    public static function setClearance(Request $r): void
+    {
+        $user = Auth::requireStaff(['admin']);
+        $data = Validator::validate($r->input(), [
+            'ids' => 'required|array',
+            'standing' => 'required|in:BLOCKED,WAIVED',
+        ]);
+
+        $ids = array_values(array_unique(array_filter(array_map('intval', $data['ids']))));
+        if ($ids === []) {
+            throw HttpError::validation(['ids' => 'Choose at least one student.']);
+        }
+        if (count($ids) > 1000) {
+            throw HttpError::validation(['ids' => 'That is too many at once. Do it in smaller batches.']);
+        }
+
+        $marks = implode(',', array_fill(0, count($ids), '?'));
+        $changed = Database::run(
+            "UPDATE students SET standing = ? WHERE id IN ({$marks})",
+            array_merge([$data['standing']], $ids),
+        )->rowCount();
+
+        $wording = $data['standing'] === 'WAIVED' ? 'cleared' : 'not cleared';
+        Activity::staff($user, "Marked {$changed} students as {$wording}");
+        Response::json(['updated' => $changed, 'standing' => $data['standing']]);
+    }
+
+    /**
+     * A whole register at once, read out of a spreadsheet or a PDF in the browser
+     * and sent here as plain rows. Anyone already on the register is skipped rather
+     * than duplicated — importing the same file twice must not double everyone.
+     */
+    public static function import(Request $r): void
+    {
+        $user = Auth::requireStaff(self::ROLES);
+        $input = $r->input();
+        $rows = is_array($input['students'] ?? null) ? $input['students'] : [];
+        if ($rows === []) {
+            throw HttpError::validation(['students' => 'There was nothing to import.']);
+        }
+        if (count($rows) > 2000) {
+            throw HttpError::validation(['students' => 'That is more than 2000 rows. Split the file and import it in parts.']);
+        }
+
+        $created = 0;
+        $skipped = 0;
+        $problems = [];
+
+        foreach ($rows as $i => $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $line = $i + 1;
+            $first = trim((string) ($row['firstName'] ?? ''));
+            $last = trim((string) ($row['lastName'] ?? ''));
+            if (mb_strlen($first) < 2 || mb_strlen($last) < 2) {
+                $problems[] = "Row {$line}: a first and last name are both needed.";
+                continue;
+            }
+
+            $wanted = Students::normaliseId((string) ($row['studentId'] ?? ''));
+            if ($wanted !== '' && Database::value('SELECT 1 FROM students WHERE student_id = ?', [$wanted])) {
+                $skipped++;
+                continue;
+            }
+            // No ID given: the same name already on the register is the same person.
+            if ($wanted === '' && Students::matching(null, $first, $last) !== []) {
+                $skipped++;
+                continue;
+            }
+
+            Database::insert('students', [
+                'student_id' => $wanted !== '' ? $wanted : Students::suggestStudentId(),
+                'first_name' => mb_substr($first, 0, 80),
+                'last_name' => mb_substr($last, 0, 80),
+                'phone' => self::trimmedOrNull($row['phone'] ?? null, 40),
+                'email' => self::trimmedOrNull($row['email'] ?? null, 190),
+                'course' => self::trimmedOrNull($row['course'] ?? null, 160),
+                'batch' => self::trimmedOrNull($row['batch'] ?? null, 80),
+                // Imported students are not cleared until an admin says so.
+                'standing' => 'BLOCKED',
+                'status_token' => Students::newToken(),
+                'created_by' => (int) $user['id'],
+            ]);
+            $created++;
+        }
+
+        Activity::staff($user, "Imported {$created} students from a file ({$skipped} already on the register)");
+        Response::json([
+            'created' => $created,
+            'skipped' => $skipped,
+            'problems' => array_slice($problems, 0, 20),
+        ]);
+    }
+
+    private static function trimmedOrNull(mixed $value, int $max): ?string
+    {
+        $value = trim((string) ($value ?? ''));
+
+        return $value === '' ? null : mb_substr($value, 0, $max);
+    }
+
     /** One student record. */
     public static function show(Request $r): void
     {

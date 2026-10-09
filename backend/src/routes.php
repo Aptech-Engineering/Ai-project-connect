@@ -197,6 +197,8 @@ return static function (Router $r): void {
     /* ---------- the student register ---------- */
     $r->get('/api/staff/students', [StudentsAdmin::class, 'index']);
     $r->post('/api/staff/students/clearance/reset', [StudentsAdmin::class, 'resetClearance']);
+    $r->post('/api/staff/students/clearance', [StudentsAdmin::class, 'setClearance']);
+    $r->post('/api/staff/students/import', [StudentsAdmin::class, 'import']);
     $r->post('/api/staff/students', [StudentsAdmin::class, 'store']);
     $r->get('/api/staff/students/{id}', [StudentsAdmin::class, 'show']);
     $r->patch('/api/staff/students/{id}', [StudentsAdmin::class, 'update']);
