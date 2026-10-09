@@ -34,6 +34,21 @@ export type ImportField = (typeof IMPORT_FIELDS)[number]["key"];
 
 const clean = (value: unknown) => String(value ?? "").replace(/\s+/g, " ").trim();
 
+/** Two letters together, anywhere: the least a person's name can be. */
+export function hasName(value: string): boolean {
+  return /\p{L}{2}/u.test(value);
+}
+
+/**
+ * A column of amounts, dates or dashes. A printed fee sheet is full of them, and
+ * none of them is anybody's name.
+ */
+function looksLikeFigures(values: string[]): boolean {
+  const filled = values.filter(Boolean);
+  if (filled.length === 0) return true;
+  return filled.filter((v) => !hasName(v)).length / filled.length > 0.6;
+}
+
 /** Does this row read like headings rather than a student? */
 function looksLikeHeadings(row: string[]): boolean {
   const joined = row.join(" ").toLowerCase();
@@ -83,8 +98,13 @@ async function readSpreadsheet(file: File): Promise<Sheet> {
 }
 
 /**
- * PDF text, back into rows. Fragments on roughly the same baseline are one line;
- * a gap wider than a space starts a new column.
+ * PDF text, back into rows.
+ *
+ * Two things decide it. Fragments belong to the same row when their baselines are
+ * within a few points — not when they round into the same bucket, which splits a
+ * row in half whenever it straddles a boundary. And a column ends where the text
+ * actually ends, which pdf.js reports as a width; guessing it from the number of
+ * characters runs the serial number into the name beside it.
  */
 async function readPdf(file: File): Promise<Sheet> {
   const pdfjs = await import("pdfjs-dist");
@@ -96,31 +116,37 @@ async function readPdf(file: File): Promise<Sheet> {
 
   for (let page = 1; page <= doc.numPages; page++) {
     const content = await (await doc.getPage(page)).getTextContent();
-    const lines = new Map<number, { x: number; text: string }[]>();
+    const parts = content.items
+      .filter((item) => "str" in item && item.str.trim() !== "" && "transform" in item)
+      .map((item) => item as { str: string; transform: number[]; width?: number })
+      .map((item) => ({
+        x: item.transform[4] as number,
+        y: item.transform[5] as number,
+        width: typeof item.width === "number" ? item.width : item.str.length * 5,
+        text: item.str,
+      }))
+      .sort((a, b) => b.y - a.y || a.x - b.x);
 
-    for (const item of content.items) {
-      if (!("str" in item) || item.str.trim() === "") continue;
-      const x = item.transform[4] as number;
-      const y = Math.round((item.transform[5] as number) / 4) * 4; // same baseline, give or take
-      const line = lines.get(y) ?? [];
-      line.push({ x, text: item.str });
-      lines.set(y, line);
+    // Same baseline, give or take: one printed row.
+    const lines: { y: number; parts: typeof parts }[] = [];
+    for (const part of parts) {
+      const line = lines[lines.length - 1];
+      if (line && Math.abs(line.y - part.y) <= 4) line.parts.push(part);
+      else lines.push({ y: part.y, parts: [part] });
     }
 
-    // Top of the page downwards.
-    for (const y of [...lines.keys()].sort((a, b) => b - a)) {
-      const parts = lines.get(y)!.sort((a, b) => a.x - b.x);
+    for (const line of lines) {
       const cells: string[] = [];
       let current = "";
       let endOfLast = -Infinity;
-      for (const part of parts) {
-        // A wide gap means a new column; a small one is just a space.
-        if (current !== "" && part.x - endOfLast > 12) {
+      for (const part of line.parts.sort((a, b) => a.x - b.x)) {
+        // Past the end of the last fragment is a new cell; inside it is a space.
+        if (current !== "" && part.x - endOfLast > 3) {
           cells.push(clean(current));
           current = "";
         }
         current += (current === "" ? "" : " ") + part.text;
-        endOfLast = part.x + part.text.length * 5;
+        endOfLast = part.x + part.width;
       }
       if (current !== "") cells.push(clean(current));
       if (cells.some((c) => c !== "")) rows.push(cells);
@@ -134,12 +160,24 @@ async function readPdf(file: File): Promise<Sheet> {
   }
 
   const headers = liftHeadings(rows);
+  const kept = rows.filter((row) => !isBlankNumberedRow(row));
   return {
     headers,
-    rows,
+    rows: kept,
     source: "pdf",
-    note: "Read from a PDF, so the columns are a guess. Check the table below before importing.",
+    note:
+      "Read from a PDF, so the columns are a guess. Check the table below before importing." +
+      (rows.length - kept.length > 0 ? ` ${rows.length - kept.length} empty numbered rows were left out.` : ""),
   };
+}
+
+/**
+ * A printed table usually runs on past the last entry with its line numbers still
+ * printed — row 313, 314, 315 and nothing beside them. They are not students.
+ */
+function isBlankNumberedRow(row: string[]): boolean {
+  const filled = row.filter((c) => c !== "");
+  return filled.length <= 1 && filled.every((c) => /^\d+$/.test(c));
 }
 
 /**
@@ -163,8 +201,10 @@ export function guessMapping(sheet: Sheet): Record<ImportField, number> {
     }
   });
 
-  // By what is in the column.
-  const sample = sheet.rows.slice(0, 12);
+  // By what is in the column. Taken from across the file, not just the top: a
+  // printed register can run names for nine pages and then amounts for seven.
+  const step = Math.max(1, Math.floor(sheet.rows.length / 40));
+  const sample = sheet.rows.filter((_, i) => i % step === 0).slice(0, 40);
   const column = (i: number) => sample.map((r) => r[i] ?? "").filter(Boolean);
   for (let i = 0; i < width; i++) {
     if (taken.has(i)) continue;
@@ -184,18 +224,43 @@ export function guessMapping(sheet: Sheet): Record<ImportField, number> {
     taken.add(i);
   }
 
-  // Whatever is left, in order, for the names.
-  const spare = Array.from({ length: width }, (_, i) => i).filter((i) => !taken.has(i));
+  // Whatever is left, in order — but only columns that hold words, never figures.
+  const spare = Array.from({ length: width }, (_, i) => i).filter((i) => !taken.has(i) && !looksLikeFigures(column(i)));
   if (map.firstName === -1 && spare.length > 0) map.firstName = spare.shift()!;
   if (map.lastName === -1 && spare.length > 0) map.lastName = spare.shift()!;
 
   return map;
 }
 
-/** One name in one cell — "Adewunmi Emmanuel" — split for the two fields. */
+/**
+ * One name in one cell, split into the two the register keeps.
+ *
+ * "UWAKWE, CHIKA LEONARD" is a surname first, so the comma decides it. Without one,
+ * the outer two names are taken and anything in the middle is dropped: a student
+ * signing in types the name they are called by and the name on the register, not
+ * their middle name. Sign-in forgives the two being the other way round, so which
+ * is which matters less than picking the two they will actually type.
+ */
 export function splitName(value: string): [string, string] {
-  const parts = value.split(/[\s,]+/).filter(Boolean);
+  const trimmed = value.trim();
+
+  const comma = trimmed.indexOf(",");
+  if (comma > 0) {
+    const surname = trimmed.slice(0, comma).trim();
+    const given = trimmed.slice(comma + 1).trim().split(/\s+/).filter(Boolean);
+    if (surname && given.length > 0) return [given[0], surname];
+  }
+
+  const parts = trimmed.split(/\s+/).filter(Boolean);
   if (parts.length === 0) return ["", ""];
   if (parts.length === 1) return [parts[0], ""];
-  return [parts[0], parts.slice(1).join(" ")];
+  return [parts[0], parts[parts.length - 1]];
+}
+
+/** Does this column hold whole names rather than one of the two halves? */
+export function looksLikeFullNames(values: string[]): boolean {
+  // Only the ones that are names at all have a say — a fee sheet's figures do not.
+  const filled = values.filter((v) => v && hasName(v));
+  if (filled.length === 0) return false;
+  return filled.filter((v) => /\s/.test(v.trim())).length / filled.length > 0.7;
 }

@@ -4,11 +4,22 @@ import { useState } from "react";
 import { AlertTriangle, Check, FileSpreadsheet, Loader2, Upload, X } from "lucide-react";
 import { errorMessage } from "@/lib/api";
 import { importStudents, type ImportRow } from "@/lib/students";
-import { IMPORT_FIELDS, guessMapping, readStudentFile, splitName, type ImportField, type Sheet } from "@/lib/studentImport";
+import { IMPORT_FIELDS, guessMapping, hasName, looksLikeFullNames, readStudentFile, splitName, type ImportField, type Sheet } from "@/lib/studentImport";
 import { cn } from "@/lib/format";
 import type { Notify } from "../PortalApp";
 
 const input = "h-9 w-full rounded-lg border border-line px-2 text-sm outline-none focus:border-brand";
+
+/**
+ * With whole names in one column there is no surname column, so whatever was taken
+ * for one is something else — usually the course, which is the next thing a printed
+ * register puts beside a name.
+ */
+function releaseLastName(map: Record<ImportField, number>): Record<ImportField, number> {
+  if (map.lastName < 0) return map;
+  const freed = map.lastName;
+  return { ...map, lastName: -1, course: map.course < 0 ? freed : map.course };
+}
 
 /**
  * Bringing a register in from a spreadsheet or a PDF.
@@ -21,8 +32,10 @@ const input = "h-9 w-full rounded-lg border border-line px-2 text-sm outline-non
 export default function StudentImport({ onClose, notify }: { onClose: () => void; notify: Notify }) {
   const [sheet, setSheet] = useState<Sheet | null>(null);
   const [map, setMap] = useState<Record<ImportField, number>>();
-  /** One cell holding "Surname Firstname": split it on the way in. */
+  /** One cell holding a whole name: split it on the way in. */
   const [oneNameColumn, setOneNameColumn] = useState(false);
+  /** A register often lists one student once per course. Those are one student. */
+  const [skipRepeats, setSkipRepeats] = useState(true);
   const [reading, setReading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -33,9 +46,14 @@ export default function StudentImport({ onClose, notify }: { onClose: () => void
     setError("");
     try {
       const read = await readStudentFile(file);
+      const guess = guessMapping(read);
       setSheet(read);
-      setMap(guessMapping(read));
-      setOneNameColumn(false);
+      setMap(guess);
+      // A single column of "CHIKA LEONARD UWAKWE" is a whole name, not a first name.
+      const whole = guess.firstName >= 0 && looksLikeFullNames(read.rows.map((r) => r[guess.firstName] ?? ""));
+      if (whole) setMap(releaseLastName(guess));
+      setOneNameColumn(whole);
+      setSkipRepeats(true);
     } catch (e) {
       setError(errorMessage(e));
       setSheet(null);
@@ -47,15 +65,19 @@ export default function StudentImport({ onClose, notify }: { onClose: () => void
   const width = sheet ? Math.max(...sheet.rows.map((r) => r.length), sheet.headers.length) : 0;
 
   /** The rows as they will be sent, with the mapping applied. */
-  const prepared: ImportRow[] = !sheet || !map
+  const prepared: (ImportRow & { asWritten: string })[] = !sheet || !map
     ? []
     : sheet.rows
         .map((row) => {
           const at = (field: ImportField) => (map[field] >= 0 ? (row[map[field]] ?? "").trim() : "");
           let firstName = at("firstName");
           let lastName = at("lastName");
+          // Kept as written, so two people are not taken for one just because the
+          // bit between their names was dropped.
+          const asWritten = (oneNameColumn ? firstName : `${firstName} ${lastName}`).trim();
           if (oneNameColumn) [firstName, lastName] = splitName(firstName);
           return {
+            asWritten,
             firstName,
             lastName,
             studentId: at("studentId"),
@@ -65,15 +87,42 @@ export default function StudentImport({ onClose, notify }: { onClose: () => void
             batch: at("batch"),
           };
         })
-        .filter((r) => r.firstName.length > 1 && r.lastName.length > 1);
+        // Both halves have to read as a name. A fee sheet's "2,600,000" is a row of
+        // the same table, and it is not a student.
+        .filter((r) => hasName(r.firstName) && hasName(r.lastName));
 
+  // The same person on two courses is one student, so by default only the first
+  // line for a name is kept — and the server would skip the rest anyway.
+  const seen = new Set<string>();
+  const repeats: ImportRow[] = [];
+  const unique = prepared.filter((row) => {
+    const key = row.asWritten.toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (seen.has(key)) {
+      repeats.push(row);
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+  const sending = skipRepeats ? unique : prepared;
+
+  // Written differently but the same two names once middle names are dropped —
+  // "HENRY ESOGA PROSPER" and "HENRY PROSPER". The server treats those as one
+  // person, so say so here rather than letting the number quietly shrink.
+  const pairs = new Set<string>();
+  const sameTwoNames = sending.filter((row) => {
+    const key = [row.firstName, row.lastName].map((v) => v.toLowerCase().replace(/[^a-z]/g, "")).sort().join("|");
+    if (pairs.has(key)) return true;
+    pairs.add(key);
+    return false;
+  }).length;
   const unusable = sheet ? sheet.rows.length - prepared.length : 0;
 
   const send = async () => {
-    if (busy || prepared.length === 0) return;
+    if (busy || sending.length === 0) return;
     setBusy(true);
     try {
-      const result = await importStudents(prepared);
+      const result = await importStudents(sending);
       setDone(result);
       notify(
         result.created > 0
@@ -169,10 +218,23 @@ export default function StudentImport({ onClose, notify }: { onClose: () => void
                 <p className="text-sm text-muted">
                   <span className="font-bold text-navy">{sheet.rows.length}</span> rows read. Say which column is which:
                 </p>
-                <label className="flex cursor-pointer items-center gap-1.5 text-xs font-bold text-navy">
-                  <input type="checkbox" checked={oneNameColumn} onChange={(e) => setOneNameColumn(e.target.checked)} />
-                  Full name is in one column
-                </label>
+                <div className="flex flex-wrap items-center gap-4">
+                  <label className="flex cursor-pointer items-center gap-1.5 text-xs font-bold text-navy">
+                    <input
+                      type="checkbox"
+                      checked={oneNameColumn}
+                      onChange={(e) => {
+                        setOneNameColumn(e.target.checked);
+                        if (e.target.checked) setMap((current) => (current ? releaseLastName(current) : current));
+                      }}
+                    />
+                    Full name is in one column
+                  </label>
+                  <label className="flex cursor-pointer items-center gap-1.5 text-xs font-bold text-navy">
+                    <input type="checkbox" checked={skipRepeats} onChange={(e) => setSkipRepeats(e.target.checked)} />
+                    One row per student
+                  </label>
+                </div>
               </div>
 
               <div className="table-scroll mt-3 max-h-80 overflow-auto rounded-xl border border-line">
@@ -226,20 +288,34 @@ export default function StudentImport({ onClose, notify }: { onClose: () => void
               <div className="mt-4 flex flex-wrap items-center gap-3">
                 <button
                   onClick={() => void send()}
-                  disabled={busy || prepared.length === 0}
+                  disabled={busy || sending.length === 0}
                   className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-brand px-5 py-2.5 text-sm font-bold text-white disabled:opacity-40"
                 >
                   {busy ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}
-                  {busy ? "Importing…" : `Import ${prepared.length} ${prepared.length === 1 ? "student" : "students"}`}
+                  {busy ? "Importing…" : `Import ${sending.length} ${sending.length === 1 ? "student" : "students"}`}
                 </button>
                 <button onClick={() => setSheet(null)} className="cursor-pointer rounded-xl border border-line px-4 py-2.5 text-sm font-bold text-navy">
                   Choose another file
                 </button>
-                {unusable > 0 && (
-                  <p className="text-xs text-muted">
-                    {unusable} {unusable === 1 ? "row has" : "rows have"} no usable name and will be left out.
-                  </p>
-                )}
+                <p className="text-xs text-muted">
+                  {repeats.length > 0 && skipRepeats && (
+                    <span className="block">
+                      {repeats.length} {repeats.length === 1 ? "row is" : "rows are"} the same name again — a student on two courses is
+                      still one student. Untick &ldquo;one row per student&rdquo; to bring them all in.
+                    </span>
+                  )}
+                  {sameTwoNames > 0 && (
+                    <span className="block">
+                      {sameTwoNames} more share a first and last name with someone else once middle names are dropped, so about{" "}
+                      <span className="font-bold text-navy">{sending.length - sameTwoNames}</span> will actually be added.
+                    </span>
+                  )}
+                  {unusable > 0 && (
+                    <span className="block">
+                      {unusable} {unusable === 1 ? "row has" : "rows have"} no usable name and will be left out.
+                    </span>
+                  )}
+                </p>
               </div>
             </>
           )}

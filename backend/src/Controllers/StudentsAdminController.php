@@ -119,7 +119,8 @@ final class StudentsAdminController
             $line = $i + 1;
             $first = trim((string) ($row['firstName'] ?? ''));
             $last = trim((string) ($row['lastName'] ?? ''));
-            if (mb_strlen($first) < 2 || mb_strlen($last) < 2) {
+            // A name has letters in it. Rows of figures off a fee sheet do not.
+            if (!preg_match('/\p{L}{2}/u', $first) || !preg_match('/\p{L}{2}/u', $last)) {
                 $problems[] = "Row {$line}: a first and last name are both needed.";
                 continue;
             }
