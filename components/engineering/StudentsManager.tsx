@@ -8,6 +8,7 @@ import {
   CheckSquare,
   FileSpreadsheet,
   ChevronDown,
+  ClipboardList,
   Copy,
   Loader2,
   RotateCw,
@@ -33,6 +34,7 @@ import { useStaff } from "@/lib/staff";
 import { cn } from "@/lib/format";
 import type { Notify } from "../PortalApp";
 import StudentImport from "./StudentImport";
+import AttendanceBoard from "./AttendanceBoard";
 
 const card = "rounded-2xl border border-line bg-white p-5 shadow-sm";
 const input = "h-10 w-full rounded-lg border border-line px-3 text-sm outline-none focus:border-brand";
@@ -51,6 +53,7 @@ export default function StudentsManager({ notify }: { notify: Notify }) {
   const { data, loading, error, refresh } = useStudents();
   const [filter, setFilter] = useState<Filter>("all");
   const [q, setQ] = useState("");
+  const [tab, setTab] = useState<"register" | "attendance">("register");
   const [adding, setAdding] = useState(false);
   const [importing, setImporting] = useState(false);
   const [openId, setOpenId] = useState<number | null>(null);
@@ -100,6 +103,26 @@ export default function StudentsManager({ notify }: { notify: Notify }) {
         </p>
       </div>
 
+      <div className="mb-4 flex flex-wrap gap-1.5">
+        {([["register", `Register (${students.length})`], ["attendance", "Attendance"]] as const).map(([key, label]) => (
+          <button
+            key={key}
+            onClick={() => setTab(key)}
+            className={cn(
+              "cursor-pointer rounded-xl px-3.5 py-2 text-sm font-bold transition",
+              tab === key ? "bg-navy text-white" : "bg-mist text-muted hover:text-navy",
+            )}
+          >
+            {key === "attendance" && <ClipboardList className="mr-1.5 inline size-4" />}
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "attendance" ? (
+        <AttendanceBoard notify={notify} />
+      ) : (
+        <>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Stat label="Students" value={String(stats.total)} />
         <Stat label="Cleared to enter" value={String(stats.cleared)} tone="teal" />
@@ -209,6 +232,8 @@ export default function StudentsManager({ notify }: { notify: Notify }) {
           ))
         )}
       </div>
+        </>
+      )}
     </div>
   );
 }

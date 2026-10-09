@@ -11,6 +11,8 @@ use App\Core\HttpError;
 use App\Core\Request;
 use App\Core\Response;
 use App\Core\Validator;
+use App\Core\Settings;
+use App\Support\Attendance;
 use App\Support\Links;
 use App\Support\Students;
 
@@ -165,6 +167,89 @@ final class StudentsAdminController
         $value = trim((string) ($value ?? ''));
 
         return $value === '' ? null : mb_substr($value, 0, $max);
+    }
+
+    /**
+     * The attendance screen: who is in the centre right now, and the log behind it.
+     * A day at a time, because that is how anyone actually reads a register.
+     */
+    public static function attendance(Request $r): void
+    {
+        Auth::requireStaff(self::ROLES);
+        Attendance::sweep();
+
+        $day = (string) ($r->query('day') ?? date('Y-m-d'));
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $day)) {
+            $day = date('Y-m-d');
+        }
+
+        $rows = Database::all(
+            'SELECT a.*, s.student_id AS ref, s.first_name, s.last_name, s.course, s.batch
+             FROM student_attendance a
+             JOIN students s ON s.id = a.student_id
+             WHERE DATE(a.signed_in_at) = ? OR a.signed_out_at IS NULL
+             ORDER BY a.signed_in_at DESC',
+            [$day],
+        );
+
+        $sessions = array_map(static function (array $row) {
+            $session = Attendance::present($row);
+            $session['studentId'] = (int) $row['student_id'];
+            $session['ref'] = $row['ref'];
+            $session['name'] = trim($row['first_name'] . ' ' . $row['last_name']);
+            $session['course'] = $row['course'];
+            $session['batch'] = $row['batch'];
+
+            return $session;
+        }, $rows);
+
+        $inNow = count(array_filter($sessions, static fn ($s) => $s['open']));
+        $today = array_values(array_filter($sessions, static fn ($s) => substr($s['signedInAt'], 0, 10) === $day || $s['open']));
+
+        Response::json([
+            'day' => $day,
+            'sessions' => $sessions,
+            'code' => Attendance::code(),
+            'sessionMinutes' => Attendance::sessionMinutes(),
+            // What the printed sheet's QR carries, so the panel can draw it.
+            'scanUrl' => Links::page('student', ['scan' => Attendance::code()]),
+            'stats' => [
+                'inNow' => $inNow,
+                'signedInToday' => count($today),
+                'minutesToday' => array_sum(array_map(static fn ($s) => $s['minutes'], $today)),
+            ],
+        ]);
+    }
+
+    /** Staff signing someone out — they went home without pressing it. */
+    public static function signOutStudent(Request $r): void
+    {
+        $user = Auth::requireStaff(self::ROLES);
+        $student = self::find((int) $r->params['id']);
+
+        Attendance::signOut((int) $student['id'], 'staff');
+        Activity::staff($user, "Signed {$student['student_id']} out of the centre");
+        Response::json(['ok' => true]);
+    }
+
+    /** A new code retires the sheet on the wall. Print the new one before you do it. */
+    public static function newAttendanceCode(Request $r): void
+    {
+        $user = Auth::requireStaff(['admin']);
+        $code = Attendance::newCode();
+        Settings::save(['attendance.code' => $code], (int) $user['id']);
+        Activity::staff($user, 'Issued a new attendance code — the printed sheet must be replaced');
+        Response::json(['code' => $code, 'scanUrl' => Links::page('student', ['scan' => $code])]);
+    }
+
+    /** How long a sitting lasts before the clock closes it. */
+    public static function setSessionMinutes(Request $r): void
+    {
+        $user = Auth::requireStaff(['admin']);
+        $data = Validator::validate($r->input(), ['minutes' => 'required|int|between:15,1440']);
+        Settings::save(['attendance.sessionMinutes' => (int) $data['minutes']], (int) $user['id']);
+        Activity::staff($user, "Set a sitting to {$data['minutes']} minutes");
+        Response::json(['sessionMinutes' => Attendance::sessionMinutes()]);
     }
 
     /** One student record. */

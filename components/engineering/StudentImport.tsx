@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { AlertTriangle, Check, FileSpreadsheet, Loader2, Upload, X } from "lucide-react";
 import { errorMessage } from "@/lib/api";
 import { importStudents, type ImportRow } from "@/lib/students";
@@ -40,6 +40,7 @@ export default function StudentImport({ onClose, notify }: { onClose: () => void
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [done, setDone] = useState<{ created: number; skipped: number; problems: string[] } | null>(null);
+  const picker = useRef<HTMLInputElement | null>(null);
 
   const pick = async (file: File) => {
     setReading(true);
@@ -59,6 +60,9 @@ export default function StudentImport({ onClose, notify }: { onClose: () => void
       setSheet(null);
     } finally {
       setReading(false);
+      // Only now. Clearing it while the file is still being read revokes the blob
+      // underneath, and the read fails with "the file could not be read".
+      if (picker.current) picker.current.value = "";
     }
   };
 
@@ -191,13 +195,13 @@ export default function StudentImport({ onClose, notify }: { onClose: () => void
               </label>
               <input
                 id="student-import-file"
+                ref={picker}
                 type="file"
                 accept=".xlsx,.xls,.csv,.tsv,.pdf,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv"
                 className="sr-only"
                 onChange={(e) => {
                   const file = e.target.files?.[0];
                   if (file) void pick(file);
-                  e.target.value = "";
                 }}
               />
               <div className="mt-4 rounded-xl bg-mist p-4 text-xs text-muted">

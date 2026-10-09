@@ -123,6 +123,8 @@ final class Students
             'batch' => $s['batch'],
             'gateNote' => $s['gate_note'],
             'verdict' => self::verdict($s),
+            'attendance' => Attendance::present(Attendance::latestFor((int) $s['id'])),
+            'sessionMinutes' => Attendance::sessionMinutes(),
             // The phone shows this so a screenshot from yesterday is obvious.
             'checkedAt' => gmdate('c'),
         ];

@@ -3,9 +3,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { AnimatePresence, motion } from "framer-motion";
-import { AlertTriangle, CheckCircle2, Download, Loader2, LogOut, RefreshCw, Share, WifiOff, X, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Download, Loader2, LogIn, LogOut, QrCode, RefreshCw, Share, Timer, WifiOff, X, XCircle } from "lucide-react";
 import { errorMessage, ApiError } from "@/lib/api";
-import { studentSignIn, studentStatus, type StudentProfile } from "@/lib/students";
+import { attendanceSignOut, studentSignIn, studentStatus, type StudentProfile } from "@/lib/students";
+import { ScanToSignIn } from "./ScanToSignIn";
 import { cn } from "@/lib/format";
 import AptechMark from "../AptechMark";
 
@@ -136,6 +137,11 @@ export function StudentPage() {
       offline={offline}
       onRefresh={() => saved && void refresh(saved.studentId, saved.token)}
       onSignOut={signOut}
+      onProfile={(fresh) => {
+        setProfile(fresh);
+        setSaved({ studentId: fresh.studentId, token: fresh.token, profile: fresh });
+        save(fresh);
+      }}
     />
   );
 }
@@ -292,12 +298,14 @@ function GateCard({
   offline,
   onRefresh,
   onSignOut,
+  onProfile,
 }: {
   profile: StudentProfile;
   busy: boolean;
   offline: boolean;
   onRefresh: () => void;
   onSignOut: () => void;
+  onProfile: (p: StudentProfile) => void;
 }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -389,6 +397,8 @@ function GateCard({
           {busy ? "Checking…" : "Check again now"}
         </button>
 
+        <Attendance profile={profile} onProfile={onProfile} />
+
         {!installed && install.state !== "none" && (
           <button
             onClick={() => setSheet(true)}
@@ -421,6 +431,118 @@ function GateCard({
       </AnimatePresence>
     </main>
   );
+}
+
+/**
+ * Attendance. Only for a cleared student, because somebody who cannot come in has
+ * nothing to sign in to.
+ *
+ * The countdown runs off the end time the server gave, so it keeps counting with no
+ * network and cannot be wound back by changing the phone's clock relative to it.
+ */
+function Attendance({ profile, onProfile }: { profile: StudentProfile; onProfile: (p: StudentProfile) => void }) {
+  const [scanning, setScanning] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [now, setNow] = useState(() => Date.now());
+
+  const session = profile.attendance;
+  useEffect(() => {
+    if (!session?.open) return;
+    const t = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(t);
+  }, [session?.open]);
+
+  if (!profile.verdict.allowed) return null;
+
+  const left = session?.open ? Math.max(0, new Date(session.endsAt).getTime() - now) : 0;
+  const over = Boolean(session?.open) && left === 0;
+
+  const out = async () => {
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      onProfile(await attendanceSignOut(profile.studentId, profile.token));
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="mt-4 rounded-2xl bg-white/5 p-4 ring-1 ring-white/10">
+      <p className="text-xs font-bold uppercase tracking-wider text-white/50">Attendance</p>
+
+      {error && <p className="mt-2 text-xs text-red-300">{error}</p>}
+
+      {session?.open ? (
+        <>
+          <div className="mt-2 flex items-baseline gap-2">
+            <Timer className="size-5 shrink-0 self-center text-teal-300" />
+            <p className="font-display text-3xl font-extrabold tabular-nums text-teal-300">{over ? "Time up" : countdown(left)}</p>
+            <p className="text-xs text-white/50">left</p>
+          </div>
+          <p className="mt-1 text-xs text-white/55">
+            Signed in at {new Date(session.signedInAt).toLocaleTimeString("en-GB")} · signed out automatically at{" "}
+            {new Date(session.endsAt).toLocaleTimeString("en-GB")} if you forget.
+          </p>
+          <button
+            onClick={() => void out()}
+            disabled={busy}
+            className="mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-white/10 text-sm font-bold text-white ring-1 ring-white/15 disabled:opacity-50"
+          >
+            {busy ? <Loader2 className="size-4 animate-spin" /> : <LogOut className="size-4" />}
+            Sign out now
+          </button>
+        </>
+      ) : (
+        <>
+          <p className="mt-1 text-sm text-white/65">
+            Scan the code on the wall as you come in. You are signed out after {Math.round(profile.sessionMinutes / 60 * 10) / 10} hours,
+            or whenever you press sign out.
+          </p>
+          <button
+            onClick={() => setScanning(true)}
+            className="mt-3 flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-brand text-base font-bold text-white hover:bg-brand-600"
+          >
+            <QrCode className="size-5" /> Scan to sign in
+          </button>
+          {session && !session.open && (
+            <p className="mt-2 flex items-center gap-1.5 text-xs text-white/45">
+              <LogIn className="size-3.5" />
+              Last here {new Date(session.signedInAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" })} for{" "}
+              {Math.floor(session.minutes / 60)}h {session.minutes % 60}m
+              {session.endedBy === "clock" ? " (signed out by the clock)" : ""}
+            </p>
+          )}
+        </>
+      )}
+
+      {scanning && (
+        <ScanToSignIn
+          studentId={profile.studentId}
+          token={profile.token}
+          onClose={() => setScanning(false)}
+          onSignedIn={(fresh) => {
+            onProfile(fresh);
+            setScanning(false);
+          }}
+        />
+      )}
+    </section>
+  );
+}
+
+/** 1:47:05 while there is an hour left, 47:05 after that. */
+function countdown(ms: number): string {
+  const total = Math.floor(ms / 1000);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const sec = total % 60;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return h > 0 ? `${h}:${pad(m)}:${pad(sec)}` : `${pad(m)}:${pad(sec)}`;
 }
 
 /** "2 minutes ago" — how old the answer on screen is. */

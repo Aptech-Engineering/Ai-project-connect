@@ -39,6 +39,8 @@ return static function (Router $r): void {
     /* ---------- students (/student) ---------- */
     $r->post('/api/students/sign-in', [StudentsPublic::class, 'signIn']);
     $r->get('/api/students/status', [StudentsPublic::class, 'status']);
+    $r->post('/api/students/attendance/sign-in', [StudentsPublic::class, 'signInAttendance']);
+    $r->post('/api/students/attendance/sign-out', [StudentsPublic::class, 'signOutAttendance']);
 
     /* ---------- scholarship programme (/scholarship) ---------- */
     $r->get('/api/scholarship', [Scholarship::class, 'show']);
@@ -199,6 +201,10 @@ return static function (Router $r): void {
     $r->post('/api/staff/students/clearance/reset', [StudentsAdmin::class, 'resetClearance']);
     $r->post('/api/staff/students/clearance', [StudentsAdmin::class, 'setClearance']);
     $r->post('/api/staff/students/import', [StudentsAdmin::class, 'import']);
+    $r->get('/api/staff/students/attendance', [StudentsAdmin::class, 'attendance']);
+    $r->post('/api/staff/students/attendance/code', [StudentsAdmin::class, 'newAttendanceCode']);
+    $r->post('/api/staff/students/attendance/length', [StudentsAdmin::class, 'setSessionMinutes']);
+    $r->post('/api/staff/students/{id}/sign-out', [StudentsAdmin::class, 'signOutStudent']);
     $r->post('/api/staff/students', [StudentsAdmin::class, 'store']);
     $r->get('/api/staff/students/{id}', [StudentsAdmin::class, 'show']);
     $r->patch('/api/staff/students/{id}', [StudentsAdmin::class, 'update']);

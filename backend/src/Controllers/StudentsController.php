@@ -10,6 +10,7 @@ use App\Core\RateLimiter;
 use App\Core\Request;
 use App\Core\Response;
 use App\Core\Validator;
+use App\Support\Attendance;
 use App\Support\Students;
 
 /**
@@ -76,9 +77,57 @@ final class StudentsController
         Response::json(self::payload($student));
     }
 
+    /**
+     * Signing in at the gate. The code comes off the sheet on the wall, either
+     * scanned or typed, and only a cleared student may sign in at all.
+     */
+    public static function signInAttendance(Request $r): void
+    {
+        RateLimiter::hit('attendance:' . $r->ip(), 120, 3600);
+        $data = Validator::validate($r->input(), [
+            'id' => 'required|string|max:30',
+            'token' => 'required|string|max:64',
+            'code' => 'required|string|max:40',
+        ]);
+
+        $student = Students::byToken($data['id'], $data['token']);
+        if ($student === null) {
+            throw HttpError::notFound('Sign in again on this phone.');
+        }
+        if (!Attendance::matches($data['code'])) {
+            throw HttpError::validation(['code' => 'That is not the code on the wall. Scan it again, or type it exactly.']);
+        }
+        if (!Students::verdict($student)['allowed']) {
+            throw HttpError::forbidden('You are not cleared, so you cannot sign in. Please see the accounts office.');
+        }
+
+        Attendance::signIn($student);
+        Response::json(self::payload($student));
+    }
+
+    /** Signing out on the way back out. The clock does it anyway if they forget. */
+    public static function signOutAttendance(Request $r): void
+    {
+        RateLimiter::hit('attendance:' . $r->ip(), 120, 3600);
+        $data = Validator::validate($r->input(), [
+            'id' => 'required|string|max:30',
+            'token' => 'required|string|max:64',
+        ]);
+
+        $student = Students::byToken($data['id'], $data['token']);
+        if ($student === null) {
+            throw HttpError::notFound('Sign in again on this phone.');
+        }
+
+        Attendance::signOut((int) $student['id']);
+        Response::json(self::payload($student));
+    }
+
     /** @param array<string, mixed> $student */
     private static function payload(array $student): array
     {
+        // A sitting whose time is up is over, whoever happens to be asking.
+        Attendance::sweep();
         // So a counsellor can see who is actually using the page.
         Database::run('UPDATE students SET last_seen_at = NOW() WHERE id = ?', [(int) $student['id']]);
 

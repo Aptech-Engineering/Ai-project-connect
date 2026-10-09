@@ -20,6 +20,19 @@ export interface Verdict {
   tone: "green" | "amber" | "red";
 }
 
+/** A sitting in the centre: signed in, and when the clock will close it. */
+export interface Session {
+  id: number;
+  signedInAt: string;
+  signedOutAt: string | null;
+  /** When the clock closes it, so the phone can count down without asking again. */
+  endsAt: string;
+  open: boolean;
+  endedBy: "student" | "clock" | "staff" | null;
+  source: "qr" | "staff";
+  minutes: number;
+}
+
 /** What the student's own phone is given — their record and nothing else. */
 export interface StudentProfile {
   studentId: string;
@@ -31,6 +44,10 @@ export interface StudentProfile {
   batch: string | null;
   gateNote: string | null;
   verdict: Verdict;
+  /** The sitting they are in the middle of, if any. */
+  attendance: Session | null;
+  /** How long a sitting lasts, in minutes. */
+  sessionMinutes: number;
   /** When the server answered — the page shows it, so an old screenshot gives itself away. */
   checkedAt: string;
 }
@@ -46,6 +63,15 @@ export async function studentSignIn(input: { firstName: string; lastName: string
 /** A refresh, with the token the phone kept instead of the name. */
 export async function studentStatus(studentId: string, token: string) {
   return api.get<StudentProfile>(`/students/status${query({ id: studentId, token })}`);
+}
+
+/** Signing in at the gate with the code off the printed sheet. */
+export async function attendanceSignIn(studentId: string, token: string, code: string) {
+  return api.post<StudentProfile>("/students/attendance/sign-in", { id: studentId, token, code });
+}
+
+export async function attendanceSignOut(studentId: string, token: string) {
+  return api.post<StudentProfile>("/students/attendance/sign-out", { id: studentId, token });
 }
 
 /* ---------------- the counsellor's register ---------------- */
@@ -154,4 +180,48 @@ export async function deleteStudent(id: number) {
 /** One student record, for the row that is open. */
 export async function loadStudent(id: number) {
   return api.get<Student>(`${STAFF_KEY}/${id}`);
+}
+
+/* ---------------- attendance, from the panel ---------------- */
+
+export interface AttendanceSession extends Session {
+  studentId: number;
+  ref: string;
+  name: string;
+  course: string | null;
+  batch: string | null;
+}
+
+export interface AttendanceDay {
+  day: string;
+  sessions: AttendanceSession[];
+  /** The code printed on the sheet at the gate. */
+  code: string;
+  sessionMinutes: number;
+  /** What the QR on that sheet carries. */
+  scanUrl: string;
+  stats: { inNow: number; signedInToday: number; minutesToday: number };
+}
+
+export function useAttendance(day?: string) {
+  return useApi<AttendanceDay>(`${STAFF_KEY}/attendance${day ? query({ day }) : ""}`);
+}
+
+/** Staff signing someone out who went home without pressing it. */
+export async function signOutStudent(id: number) {
+  await api.post(`${STAFF_KEY}/${id}/sign-out`, {});
+  await invalidate(`${STAFF_KEY}/attendance`);
+}
+
+/** A new code retires the printed sheet. Admins only. */
+export async function newAttendanceCode() {
+  const result = await api.post<{ code: string; scanUrl: string }>(`${STAFF_KEY}/attendance/code`, {});
+  await invalidate(`${STAFF_KEY}/attendance`);
+  return result;
+}
+
+export async function setSessionMinutes(minutes: number) {
+  const result = await api.post<{ sessionMinutes: number }>(`${STAFF_KEY}/attendance/length`, { minutes });
+  await invalidate(`${STAFF_KEY}/attendance`);
+  return result.sessionMinutes;
 }

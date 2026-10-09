@@ -71,16 +71,22 @@ function liftHeadings(rows: string[][]): string[] {
   return headers;
 }
 
+/**
+ * The bytes are taken from the file the moment it is chosen, before anything else.
+ * A File is a handle to something on disk, and a handle read a second or two later
+ * — after a parser has been fetched, say — can already have gone stale.
+ */
 export async function readStudentFile(file: File): Promise<Sheet> {
   const name = file.name.toLowerCase();
-  if (name.endsWith(".pdf")) return readPdf(file);
-  return readSpreadsheet(file);
+  const bytes = await file.arrayBuffer();
+
+  return name.endsWith(".pdf") ? readPdf(bytes) : readSpreadsheet(bytes);
 }
 
 /** xlsx, xls, csv and tsv all come through SheetJS, so one path covers them. */
-async function readSpreadsheet(file: File): Promise<Sheet> {
+async function readSpreadsheet(bytes: ArrayBuffer): Promise<Sheet> {
   const XLSX = await import("xlsx");
-  const book = XLSX.read(await file.arrayBuffer(), { type: "array" });
+  const book = XLSX.read(bytes, { type: "array" });
   const first = book.SheetNames[0];
   if (!first) throw new Error("That file has no sheets in it.");
 
@@ -106,11 +112,11 @@ async function readSpreadsheet(file: File): Promise<Sheet> {
  * actually ends, which pdf.js reports as a width; guessing it from the number of
  * characters runs the serial number into the name beside it.
  */
-async function readPdf(file: File): Promise<Sheet> {
+async function readPdf(bytes: ArrayBuffer): Promise<Sheet> {
   const pdfjs = await import("pdfjs-dist");
   pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
 
-  const task = pdfjs.getDocument({ data: await file.arrayBuffer() });
+  const task = pdfjs.getDocument({ data: new Uint8Array(bytes) });
   const doc = await task.promise;
   const rows: string[][] = [];
 

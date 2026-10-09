@@ -45,6 +45,12 @@ final class Settings
             'termiiApiKey' => ['type' => 'string', 'secret' => true, 'config' => 'sms.termii_api_key', 'default' => ''],
             'termiiSenderId' => ['type' => 'string', 'config' => 'sms.sender_id', 'default' => 'APConnect'],
         ],
+        // The printed sign-in code and how long a sitting lasts. Kept here so an
+        // admin can retire a sheet that has been photographed.
+        'attendance' => [
+            'code' => ['type' => 'string', 'default' => ''],
+            'sessionMinutes' => ['type' => 'int', 'default' => 150],
+        ],
     ];
 
     /** @var array<string, array{value: ?string, is_secret: int, updated_by: ?int, updated_at: string}>|null */
